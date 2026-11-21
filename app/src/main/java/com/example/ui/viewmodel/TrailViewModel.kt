@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.location.Location
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +16,7 @@ import com.example.data.repository.TrailRepository
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.LocationPlace
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
@@ -41,15 +43,20 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private val rideRepository = RideRepository(database.offlineTrailDao())
     private val locationProvider = LocationProvider(application)
     private val rideTracker = RideTracker(application)
+    private val prefs = application.getSharedPreferences("singletrack_prefs", Context.MODE_PRIVATE)
     val healthConnectSyncManager = HealthConnectSyncManager(application)
 
     private val _uiState = MutableStateFlow(
-        MainUiState(hasLocationPermission = locationProvider.hasLocationPermission())
+        MainUiState(
+            measurementUnit = loadSavedUnit(),
+            hasLocationPermission = locationProvider.hasLocationPermission()
+        )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     private var rideTimerJob: Job? = null
     private var rideGpsJob: Job? = null
+    private var detailLoadJob: Job? = null
     private var lastAltitudeMeters: Double? = null
 
     init {
@@ -85,6 +92,25 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         if (destination == AppDestination.RIDE) {
             refreshHealthConnectStatus()
         }
+    }
+
+    fun setMeasurementUnit(unit: MeasurementUnit) {
+        prefs.edit().putString(KEY_MEASUREMENT_UNIT, unit.name).apply()
+        _uiState.update { it.copy(measurementUnit = unit) }
+    }
+
+    fun toggleMeasurementUnit() {
+        val next = if (_uiState.value.measurementUnit == MeasurementUnit.IMPERIAL) {
+            MeasurementUnit.METRIC
+        } else {
+            MeasurementUnit.IMPERIAL
+        }
+        setMeasurementUnit(next)
+    }
+
+    private fun loadSavedUnit(): MeasurementUnit {
+        val raw = prefs.getString(KEY_MEASUREMENT_UNIT, null)
+        return MeasurementUnit.entries.firstOrNull { it.name == raw } ?: MeasurementUnit.IMPERIAL
     }
 
     fun onLocationPermissionResult(granted: Boolean) {
@@ -177,12 +203,15 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun scanTrailsAt(lat: Double, lon: Double) {
+        detailLoadJob?.cancel()
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isLoadingTrails = true,
                     trailErrorMessage = null,
-                    selectedTrail = null
+                    selectedTrail = null,
+                    isLoadingTrailGeometry = false,
+                    isLoadingElevation = false
                 )
             }
 
@@ -265,40 +294,101 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openTrailDetail(trail: Trail) {
+        detailLoadJob?.cancel()
+        val needsGeometry = trail.geometry.size < 2 && trail.routeSegments.none { it.size >= 2 }
+        val needsElevation = trail.elevationProfile == null
+
         _uiState.update {
             it.copy(
                 selectedTrail = trail,
-                isLoadingTrailGeometry = trail.geometry.size < 2
+                isLoadingTrailGeometry = needsGeometry,
+                isLoadingElevation = needsElevation
             )
         }
-        if (trail.geometry.size < 2) {
-            viewModelScope.launch {
-                val geom = trailRepository.fetchTrailGeometry(trail)
-                val updatedLength = if (trail.lengthMiles == null && geom.size >= 2) {
-                    GeoUtils.polylineLengthMiles(geom).takeIf { it >= 0.05 }
-                } else {
-                    trail.lengthMiles
+
+        if (!needsGeometry && !needsElevation) return
+
+        detailLoadJob = viewModelScope.launch {
+            try {
+                var targetTrail = trail
+                if (needsGeometry) {
+                    val geom = trailRepository.fetchTrailGeometry(trail)
+                    val updatedLength = if (trail.lengthMiles == null && geom.size >= 2) {
+                        GeoUtils.polylineLengthMiles(geom).takeIf { it >= 0.05 }
+                    } else {
+                        trail.lengthMiles
+                    }
+                    _uiState.update { state ->
+                        val currentSelected = state.selectedTrail
+                        if (currentSelected?.osmKey == trail.osmKey) {
+                            val enriched = currentSelected.copy(
+                                geometry = geom,
+                                routeSegments = if (geom.size >= 2) listOf(geom) else currentSelected.routeSegments,
+                                lengthMiles = updatedLength
+                            )
+                            targetTrail = enriched
+                            state.copy(
+                                selectedTrail = enriched,
+                                isLoadingTrailGeometry = false,
+                                trails = state.trails.map {
+                                    if (it.osmKey == enriched.osmKey) enriched else it
+                                },
+                                filteredTrails = state.filteredTrails.map {
+                                    if (it.osmKey == enriched.osmKey) enriched else it
+                                }
+                            )
+                        } else {
+                            state.copy(isLoadingTrailGeometry = false)
+                        }
+                    }
                 }
-                _uiState.update { state ->
-                    val currentSelected = state.selectedTrail
-                    if (currentSelected?.osmKey == trail.osmKey) {
-                        val enriched = currentSelected.copy(
-                            geometry = geom,
-                            routeSegments = if (geom.size >= 2) listOf(geom) else currentSelected.routeSegments,
-                            lengthMiles = updatedLength
-                        )
-                        state.copy(
-                            selectedTrail = enriched,
-                            isLoadingTrailGeometry = false,
-                            trails = state.trails.map {
-                                if (it.osmKey == enriched.osmKey) enriched else it
-                            },
-                            filteredTrails = state.filteredTrails.map {
-                                if (it.osmKey == enriched.osmKey) enriched else it
+
+                val activeSelected = _uiState.value.selectedTrail
+                if (activeSelected?.osmKey == trail.osmKey) {
+                    targetTrail = activeSelected
+                }
+
+                if (targetTrail.elevationProfile == null) {
+                    val profile = trailRepository.fetchTrailElevation(targetTrail)
+                    if (profile != null) {
+                        _uiState.update { state ->
+                            val currentSelected = state.selectedTrail
+                            val updatedGain = profile.elevationGainFeet
+                            val enrichFn: (Trail) -> Trail = { item ->
+                                if (item.osmKey == trail.osmKey) {
+                                    item.copy(
+                                        elevationProfile = profile,
+                                        elevationGainFeet = updatedGain
+                                    )
+                                } else {
+                                    item
+                                }
                             }
+                            if (currentSelected?.osmKey == trail.osmKey) {
+                                state.copy(
+                                    selectedTrail = enrichFn(currentSelected),
+                                    isLoadingElevation = false,
+                                    trails = state.trails.map(enrichFn),
+                                    filteredTrails = state.filteredTrails.map(enrichFn)
+                                )
+                            } else {
+                                state.copy(
+                                    trails = state.trails.map(enrichFn),
+                                    filteredTrails = state.filteredTrails.map(enrichFn)
+                                )
+                            }
+                        }
+                    }
+                }
+            } finally {
+                _uiState.update { state ->
+                    if (state.selectedTrail?.osmKey == trail.osmKey) {
+                        state.copy(
+                            isLoadingTrailGeometry = false,
+                            isLoadingElevation = false
                         )
                     } else {
-                        state.copy(isLoadingTrailGeometry = false)
+                        state
                     }
                 }
             }
@@ -306,7 +396,14 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeTrailDetail() {
-        _uiState.update { it.copy(selectedTrail = null, isLoadingTrailGeometry = false) }
+        detailLoadJob?.cancel()
+        _uiState.update {
+            it.copy(
+                selectedTrail = null,
+                isLoadingTrailGeometry = false,
+                isLoadingElevation = false
+            )
+        }
     }
 
     fun openFullScreenMap(focusTrail: Trail? = null) {
@@ -387,7 +484,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                     isFromOfflineCache = true,
                     activeOfflineRegionName = region.name,
                     isCurrentAreaSavedOffline = true,
-                    selectedTrail = null
+                    selectedTrail = null,
+                    isLoadingTrailGeometry = false,
+                    isLoadingElevation = false
                 )
             }
         }
@@ -761,5 +860,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
+    }
+
+    companion object {
+        private const val KEY_MEASUREMENT_UNIT = "measurement_unit"
     }
 }

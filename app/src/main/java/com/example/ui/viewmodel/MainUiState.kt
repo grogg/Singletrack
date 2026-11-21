@@ -4,6 +4,7 @@ import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.LocationPlace
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.Trail
@@ -19,6 +20,7 @@ enum class AppDestination(val label: String) {
 
 data class MainUiState(
     val currentDestination: AppDestination = AppDestination.EXPLORE,
+    val measurementUnit: MeasurementUnit = MeasurementUnit.IMPERIAL,
     val hasLocationPermission: Boolean = false,
     val isLocating: Boolean = false,
     val locationUnavailableReason: String? = null,
@@ -36,6 +38,7 @@ data class MainUiState(
     val usedSingletrackFallback: Boolean = false,
     val selectedTrail: Trail? = null,
     val isLoadingTrailGeometry: Boolean = false,
+    val isLoadingElevation: Boolean = false,
     val isFullScreenMap: Boolean = false,
     val offlineRegions: List<OfflineRegion> = emptyList(),
     val isDownloadingRegion: Boolean = false,

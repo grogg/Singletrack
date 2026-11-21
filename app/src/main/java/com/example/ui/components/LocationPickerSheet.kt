@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.LocationPlace
+import com.example.domain.model.MeasurementUnit
 
 private val POPULAR_MTB_HUBS = listOf(
     LocationPlace("Moab, UT", 38.5733, -109.5498),
@@ -62,7 +63,8 @@ fun LocationPickerSheet(
     onUseCurrentGps: () -> Unit,
     onSelectPlace: (LocationPlace) -> Unit,
     onDismiss: () -> Unit,
-    title: String = "Choose Riding Area"
+    title: String = "Choose Riding Area",
+    measurementUnit: MeasurementUnit = MeasurementUnit.IMPERIAL
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -77,7 +79,7 @@ fun LocationPickerSheet(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Scan or download all MTB trails within a 20-mile radius.",
+                text = "Scan or download all MTB trails within a ${FormatUtils.formatRadiusAdjective(unit = measurementUnit).lowercase()} radius.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

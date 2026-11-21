@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.TrailDifficulty
 import com.example.ui.theme.DifficultyAdvancedColor
 import com.example.ui.theme.DifficultyAdvancedDarkColor
@@ -29,9 +30,11 @@ import com.example.ui.theme.DifficultyEasyColor
 import com.example.ui.theme.DifficultyExpertColor
 import com.example.ui.theme.DifficultyIntermediateColor
 import com.example.ui.theme.DifficultyUnratedColor
+import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @Composable
 fun difficultyAccentColor(difficulty: TrailDifficulty): Color {
@@ -133,6 +136,77 @@ fun DifficultyBadge(
 }
 
 object FormatUtils {
+    const val MILES_TO_KM = 1.609344
+    const val FEET_TO_METERS = 0.3048
+
+    fun distanceValue(miles: Double, unit: MeasurementUnit): Double {
+        return when (unit) {
+            MeasurementUnit.IMPERIAL -> miles
+            MeasurementUnit.METRIC -> miles * MILES_TO_KM
+        }
+    }
+
+    fun elevationValue(feet: Int, unit: MeasurementUnit): Int {
+        return when (unit) {
+            MeasurementUnit.IMPERIAL -> feet
+            MeasurementUnit.METRIC -> (feet * FEET_TO_METERS).roundToInt()
+        }
+    }
+
+    fun formatDistance(
+        miles: Double,
+        unit: MeasurementUnit,
+        decimals: Int = 1
+    ): String {
+        val converted = distanceValue(miles, unit)
+        val suffix = if (unit == MeasurementUnit.METRIC) "km" else "mi"
+        return String.format(Locale.US, "%.${decimals}f %s", converted, suffix)
+    }
+
+    fun formatSpeed(mph: Double, unit: MeasurementUnit): String {
+        val converted = distanceValue(mph, unit)
+        val suffix = if (unit == MeasurementUnit.METRIC) "km/h" else "mph"
+        return String.format(Locale.US, "%.1f %s", converted, suffix)
+    }
+
+    fun formatElevation(
+        feet: Int,
+        unit: MeasurementUnit,
+        prefix: String = ""
+    ): String {
+        val converted = elevationValue(feet, unit)
+        val suffix = if (unit == MeasurementUnit.METRIC) "m" else "ft"
+        val formatted = NumberFormat.getIntegerInstance(Locale.US).format(converted)
+        return "$prefix$formatted $suffix"
+    }
+
+    fun formatElevation(
+        feet: Double,
+        unit: MeasurementUnit,
+        prefix: String = ""
+    ): String = formatElevation(feet.roundToInt(), unit, prefix)
+
+    fun formatRadiusShort(radiusMiles: Double = 20.0, unit: MeasurementUnit): String {
+        return when (unit) {
+            MeasurementUnit.IMPERIAL -> "${radiusMiles.roundToInt()} mi"
+            MeasurementUnit.METRIC -> "${(radiusMiles * MILES_TO_KM).roundToInt()} km"
+        }
+    }
+
+    fun formatRadiusAdjective(radiusMiles: Double = 20.0, unit: MeasurementUnit): String {
+        return when (unit) {
+            MeasurementUnit.IMPERIAL -> "${radiusMiles.roundToInt()}-Mile"
+            MeasurementUnit.METRIC -> "${(radiusMiles * MILES_TO_KM).roundToInt()}-km"
+        }
+    }
+
+    fun formatRadiusLong(radiusMiles: Double = 20.0, unit: MeasurementUnit): String {
+        return when (unit) {
+            MeasurementUnit.IMPERIAL -> "${radiusMiles.roundToInt()} miles"
+            MeasurementUnit.METRIC -> "${(radiusMiles * MILES_TO_KM).roundToInt()} km"
+        }
+    }
+
     fun formatDuration(totalSeconds: Long): String {
         val hours = totalSeconds / 3600
         val minutes = (totalSeconds % 3600) / 60

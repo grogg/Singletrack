@@ -49,7 +49,9 @@ data class CachedTrailEntity(
     val oneway: String?,
     val uphillScale: String?,
     val isDesignatedMtb: Boolean,
-    val geometryEncoded: String
+    val geometryEncoded: String,
+    val elevationGainFeet: Int? = null,
+    val elevationProfileEncoded: String = ""
 )
 
 @Entity(tableName = "recorded_rides")

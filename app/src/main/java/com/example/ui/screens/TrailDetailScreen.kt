@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.OfflinePin
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -45,8 +46,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.Trail
 import com.example.ui.components.DifficultyBadge
+import com.example.ui.components.ElevationProfileCard
+import com.example.ui.components.FormatUtils
 import com.example.ui.components.TrailShapeCanvas
 import java.util.Locale
 
@@ -55,8 +59,11 @@ import java.util.Locale
 fun TrailDetailScreen(
     trail: Trail,
     isLoadingGeometry: Boolean,
+    isLoadingElevation: Boolean,
+    measurementUnit: MeasurementUnit,
     showBackNavigation: Boolean,
     onBack: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRecordRideOnTrail: (Trail) -> Unit,
     onExpandOnTopoMap: ((Trail) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -83,6 +90,17 @@ fun TrailDetailScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.cd_back)
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = onOpenSettings,
+                        modifier = Modifier.testTag("detail_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "Measurement units settings"
                         )
                     }
                 }
@@ -173,6 +191,13 @@ fun TrailDetailScreen(
                 }
             }
 
+            // Elevation Profile & Physical Effort Card
+            ElevationProfileCard(
+                trail = trail,
+                isLoadingElevation = isLoadingElevation,
+                measurementUnit = measurementUnit
+            )
+
             // 2x2 Telemetry Stats Grid
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -180,18 +205,13 @@ fun TrailDetailScreen(
             ) {
                 StatCard(
                     label = "Distance Away",
-                    value = String.format(
-                        Locale.US,
-                        "%.1f mi %s",
-                        trail.distanceFromUserMiles,
-                        trail.bearingCardinal
-                    ),
+                    value = "${FormatUtils.formatDistance(trail.distanceFromUserMiles, measurementUnit)} ${trail.bearingCardinal}",
                     modifier = Modifier.weight(1f)
                 )
                 StatCard(
                     label = "Trail Length",
                     value = trail.lengthMiles?.let {
-                        String.format(Locale.US, "%.2f mi", it)
+                        FormatUtils.formatDistance(it, measurementUnit, decimals = 2)
                     } ?: "Not tagged",
                     modifier = Modifier.weight(1f)
                 )
@@ -265,7 +285,10 @@ fun TrailDetailScreen(
                             append("${trail.name} (${trail.difficulty.label})\n")
                             append("Surface: ${trail.surface}\n")
                             trail.lengthMiles?.let {
-                                append(String.format(Locale.US, "Length: %.2f mi\n", it))
+                                append("Length: ${FormatUtils.formatDistance(it, measurementUnit, decimals = 2)}\n")
+                            }
+                            (trail.elevationProfile?.elevationGainFeet ?: trail.elevationGainFeet)?.let { gain ->
+                                append("Elevation Gain: ${FormatUtils.formatElevation(gain, measurementUnit, prefix = "+")}\n")
                             }
                             append(
                                 String.format(
@@ -308,6 +331,14 @@ fun TrailDetailScreen(
                         style = MaterialTheme.typography.titleSmall
                     )
                     InfoRow("Coordinates", String.format(Locale.US, "%.5f°, %.5f°", trail.centerLat, trail.centerLon))
+                    trail.elevationProfile?.let { profile ->
+                        val minStr = FormatUtils.elevationValue(profile.minElevationFeet, measurementUnit)
+                        val maxStr = FormatUtils.formatElevation(profile.maxElevationFeet, measurementUnit)
+                        InfoRow(
+                            "Elevation Range",
+                            "$minStr – $maxStr"
+                        )
+                    }
                     trail.networkName?.takeIf { it.isNotBlank() }?.let {
                         InfoRow("Trail Network", it)
                     }

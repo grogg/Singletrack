@@ -1,7 +1,9 @@
 package com.example.data.local
 
+import com.example.domain.model.ElevationPoint
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.RideSample
+import com.example.domain.model.TrailElevationProfile
 import java.util.Locale
 
 object GeometrySerializer {
@@ -83,5 +85,48 @@ object GeometrySerializer {
                 null
             }
         }
+    }
+
+    fun encodeElevationProfile(profile: TrailElevationProfile): String {
+        if (profile.points.isEmpty()) return ""
+        val header = "${profile.elevationGainFeet},${profile.elevationLossFeet}," +
+            "${profile.minElevationFeet},${profile.maxElevationFeet},${profile.maxGradePercent}"
+        val pts = profile.points.joinToString(separator = ";") { pt ->
+            String.format(Locale.US, "%.4f,%.1f", pt.distanceMiles, pt.elevationFeet)
+        }
+        return "$header|$pts"
+    }
+
+    fun decodeElevationProfile(raw: String): TrailElevationProfile? {
+        if (raw.isBlank()) return null
+        val parts = raw.split("|", limit = 2)
+        if (parts.size != 2) return null
+        val header = parts[0].split(",")
+        if (header.size != 5) return null
+        val gain = header[0].toIntOrNull() ?: return null
+        val loss = header[1].toIntOrNull() ?: return null
+        val minFt = header[2].toIntOrNull() ?: return null
+        val maxFt = header[3].toIntOrNull() ?: return null
+        val maxGrade = header[4].toIntOrNull() ?: return null
+        val points = parts[1].split(";").mapNotNull { token ->
+            val coords = token.split(",")
+            if (coords.size == 2) {
+                val dist = coords[0].toDoubleOrNull()
+                val elev = coords[1].toDoubleOrNull()
+                if (dist != null && elev != null) ElevationPoint(dist, elev) else null
+            } else {
+                null
+            }
+        }
+        if (points.size < 2) return null
+        return TrailElevationProfile(
+            elevationGainFeet = gain,
+            elevationLossFeet = loss,
+            minElevationFeet = minFt,
+            maxElevationFeet = maxFt,
+            maxGradePercent = maxGrade,
+            points = points,
+            sourceLabel = "Cached Offline Elevation Profile"
+        )
     }
 }

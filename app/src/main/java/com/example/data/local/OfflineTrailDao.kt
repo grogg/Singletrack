@@ -27,6 +27,9 @@ interface OfflineTrailDao {
     @Query("SELECT * FROM cached_trails WHERE osmKey = :osmKey LIMIT 1")
     suspend fun findCachedTrailByKey(osmKey: String): CachedTrailEntity?
 
+    @Query("UPDATE cached_trails SET elevationGainFeet = :gainFeet, elevationProfileEncoded = :profileEncoded WHERE osmKey = :osmKey")
+    suspend fun updateCachedTrailElevation(osmKey: String, gainFeet: Int?, profileEncoded: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRegion(region: OfflineRegionEntity)
 

@@ -70,6 +70,7 @@ import com.example.data.remote.TopoTileLoader
 import com.example.data.repository.GeoUtils
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.LocationPlace
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.ui.theme.DifficultyAdvancedColor
@@ -105,7 +106,8 @@ fun TrailRadarMap(
     modifier: Modifier = Modifier,
     isFullScreen: Boolean = false,
     onToggleFullScreen: (() -> Unit)? = null,
-    initialSelectedTrail: Trail? = null
+    initialSelectedTrail: Trail? = null,
+    measurementUnit: MeasurementUnit = MeasurementUnit.IMPERIAL
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -448,7 +450,7 @@ fun TrailRadarMap(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "${trails.size} trails • 20 mi Topo",
+                        text = "${trails.size} trails • ${FormatUtils.formatRadiusShort(GeoUtils.RADIUS_TWENTY_MILES, measurementUnit)} Topo",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -563,12 +565,7 @@ fun TrailRadarMap(
                             ) {
                                 DifficultyBadge(difficulty = trail.difficulty, showFullLabel = false)
                                 Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "%.1f mi %s",
-                                        trail.distanceFromUserMiles,
-                                        trail.bearingCardinal
-                                    ),
+                                    text = "${FormatUtils.formatDistance(trail.distanceFromUserMiles, measurementUnit)} ${trail.bearingCardinal}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -583,7 +580,7 @@ fun TrailRadarMap(
                             val metaLine = buildString {
                                 append(trail.surface)
                                 trail.lengthMiles?.let {
-                                    append(String.format(Locale.US, " • %.1f mi route", it))
+                                    append(" • ${FormatUtils.formatDistance(it, measurementUnit)} route")
                                 }
                             }
                             Text(

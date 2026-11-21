@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.singletrack.mxbkqr"
     minSdk = 26
     targetSdk = 36
-    versionCode = 4
-    versionName = "4.0"
+    versionCode = 6
+    versionName = "6.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -80,6 +80,10 @@ secrets {
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
+
+composeCompiler {
+  includeComposeMappingFile.set(false)
+}
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
@@ -44,20 +45,22 @@ import androidx.compose.ui.unit.dp
 import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
 import com.example.ui.components.FormatUtils
 import com.example.ui.components.TrailShapeCanvas
-import java.util.Locale
 
 @Composable
 fun RideScreen(
     activeRide: ActiveRideMetrics,
     recordedRides: List<RecordedRide>,
+    measurementUnit: MeasurementUnit,
     healthConnectStatus: HealthConnectStatus,
     autoSyncEnabled: Boolean,
     syncingRideId: String?,
     hasLocationPermission: Boolean,
+    onOpenSettings: () -> Unit,
     onRequestLocationPermission: () -> Unit,
     onConnectHealthConnect: () -> Unit,
     onInstallHealthConnect: () -> Unit,
@@ -86,10 +89,26 @@ fun RideScreen(
     ) {
         item(key = "header") {
             Column {
-                Text(
-                    text = "Ride Tracker & Fit Sync",
-                    style = MaterialTheme.typography.headlineMedium
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Ride Tracker & Fit Sync",
+                        style = MaterialTheme.typography.headlineMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = onOpenSettings,
+                        modifier = Modifier.testTag("ride_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "Measurement units settings"
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Record live GPS MTB rides and sync workouts with Google Fit via Health Connect.",
@@ -287,15 +306,25 @@ fun RideScreen(
                     ) {
                         RideMetricCell(
                             label = "Distance",
-                            value = String.format(Locale.US, "%.2f mi", activeRide.distanceMiles)
+                            value = FormatUtils.formatDistance(
+                                activeRide.distanceMiles,
+                                measurementUnit,
+                                decimals = 2
+                            )
                         )
                         RideMetricCell(
                             label = "Speed",
-                            value = String.format(Locale.US, "%.1f mph", activeRide.currentSpeedMph)
+                            value = FormatUtils.formatSpeed(
+                                activeRide.currentSpeedMph,
+                                measurementUnit
+                            )
                         )
                         RideMetricCell(
                             label = "Elev Gain",
-                            value = String.format(Locale.US, "%.0f ft", activeRide.elevationGainFeet)
+                            value = FormatUtils.formatElevation(
+                                activeRide.elevationGainFeet,
+                                measurementUnit
+                            )
                         )
                     }
 
@@ -412,6 +441,7 @@ fun RideScreen(
             items(items = recordedRides, key = { it.id }) { ride ->
                 RecordedRideCard(
                     ride = ride,
+                    measurementUnit = measurementUnit,
                     isSyncing = syncingRideId == ride.id,
                     canSyncHealthConnect = healthConnectStatus.permissionsGranted,
                     onSync = {
@@ -446,6 +476,7 @@ private fun RideMetricCell(label: String, value: String) {
 @Composable
 private fun RecordedRideCard(
     ride: RecordedRide,
+    measurementUnit: MeasurementUnit,
     isSyncing: Boolean,
     canSyncHealthConnect: Boolean,
     onSync: () -> Unit,
@@ -497,9 +528,18 @@ private fun RecordedRideCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 RideMetricCell("Duration", FormatUtils.formatDuration(ride.durationSeconds))
-                RideMetricCell("Distance", String.format(Locale.US, "%.2f mi", ride.distanceMiles))
-                RideMetricCell("Avg Speed", String.format(Locale.US, "%.1f mph", ride.avgSpeedMph))
-                RideMetricCell("Elev", String.format(Locale.US, "%.0f ft", ride.elevationGainFeet))
+                RideMetricCell(
+                    "Distance",
+                    FormatUtils.formatDistance(ride.distanceMiles, measurementUnit, decimals = 2)
+                )
+                RideMetricCell(
+                    "Avg Speed",
+                    FormatUtils.formatSpeed(ride.avgSpeedMph, measurementUnit)
+                )
+                RideMetricCell(
+                    "Elev",
+                    FormatUtils.formatElevation(ride.elevationGainFeet, measurementUnit)
+                )
             }
 
             if (ride.syncedToHealthConnect) {

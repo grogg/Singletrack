@@ -53,8 +53,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.health.HealthConnectSyncManager
 import com.example.domain.model.RideRecordingStatus
+import com.example.ui.components.FormatUtils
 import com.example.ui.components.LocationPickerSheet
 import com.example.ui.components.TrailRadarMap
+import com.example.ui.components.UnitSettingsDialog
 import com.example.ui.screens.ExploreScreen
 import com.example.ui.screens.OfflineRegionsScreen
 import com.example.ui.screens.RideScreen
@@ -89,6 +91,7 @@ fun SingletrackApp(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var pickerPurpose by remember { mutableStateOf(PickerPurpose.NONE) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -194,8 +197,11 @@ fun SingletrackApp(
                             TrailDetailScreen(
                                 trail = state.selectedTrail!!,
                                 isLoadingGeometry = state.isLoadingTrailGeometry,
+                                isLoadingElevation = state.isLoadingElevation,
+                                measurementUnit = state.measurementUnit,
                                 showBackNavigation = true,
                                 onBack = viewModel::closeTrailDetail,
+                                onOpenSettings = { showSettingsDialog = true },
                                 onRecordRideOnTrail = viewModel::startRideForTrail,
                                 onExpandOnTopoMap = { trail -> viewModel.openFullScreenMap(focusTrail = trail) }
                             )
@@ -210,6 +216,7 @@ fun SingletrackApp(
                                         onOpenLocationPicker = {
                                             pickerPurpose = PickerPurpose.EXPLORE_LOCATION
                                         },
+                                        onOpenSettings = { showSettingsDialog = true },
                                         onRefreshTrails = viewModel::refreshActiveLocationTrails,
                                         onDownloadRegion = viewModel::downloadActiveRegionForOffline,
                                         onSearchQueryChange = viewModel::updateSearchQuery,
@@ -224,8 +231,11 @@ fun SingletrackApp(
                                     TrailDetailScreen(
                                         trail = state.selectedTrail!!,
                                         isLoadingGeometry = state.isLoadingTrailGeometry,
+                                        isLoadingElevation = state.isLoadingElevation,
+                                        measurementUnit = state.measurementUnit,
                                         showBackNavigation = false,
                                         onBack = viewModel::closeTrailDetail,
+                                        onOpenSettings = { showSettingsDialog = true },
                                         onRecordRideOnTrail = viewModel::startRideForTrail,
                                         onExpandOnTopoMap = { trail -> viewModel.openFullScreenMap(focusTrail = trail) },
                                         modifier = Modifier.weight(1f)
@@ -238,6 +248,7 @@ fun SingletrackApp(
                                     onOpenLocationPicker = {
                                         pickerPurpose = PickerPurpose.EXPLORE_LOCATION
                                     },
+                                    onOpenSettings = { showSettingsDialog = true },
                                     onRefreshTrails = viewModel::refreshActiveLocationTrails,
                                     onDownloadRegion = viewModel::downloadActiveRegionForOffline,
                                     onSearchQueryChange = viewModel::updateSearchQuery,
@@ -255,8 +266,10 @@ fun SingletrackApp(
                             OfflineRegionsScreen(
                                 regions = state.offlineRegions,
                                 activeLocation = state.activeLocation,
+                                measurementUnit = state.measurementUnit,
                                 isDownloadingRegion = state.isDownloadingRegion,
                                 downloadingRegionName = state.downloadingRegionName,
+                                onOpenSettings = { showSettingsDialog = true },
                                 onDownloadCurrentArea = viewModel::downloadActiveRegionForOffline,
                                 onOpenRegionPicker = {
                                     pickerPurpose = PickerPurpose.OFFLINE_DOWNLOAD
@@ -278,10 +291,12 @@ fun SingletrackApp(
                             RideScreen(
                                 activeRide = state.activeRide,
                                 recordedRides = state.recordedRides,
+                                measurementUnit = state.measurementUnit,
                                 healthConnectStatus = state.healthConnectStatus,
                                 autoSyncEnabled = state.autoSyncToHealthConnect,
                                 syncingRideId = state.syncingRideId,
                                 hasLocationPermission = state.hasLocationPermission,
+                                onOpenSettings = { showSettingsDialog = true },
                                 onRequestLocationPermission = requestLocationPermission,
                                 onConnectHealthConnect = {
                                     healthConnectPermissionLauncher.launch(
@@ -343,6 +358,7 @@ fun SingletrackApp(
                 isFullScreen = true,
                 onToggleFullScreen = viewModel::closeFullScreenMap,
                 initialSelectedTrail = state.selectedTrail,
+                measurementUnit = state.measurementUnit,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -351,7 +367,7 @@ fun SingletrackApp(
     if (pickerPurpose != PickerPurpose.NONE) {
         LocationPickerSheet(
             title = if (pickerPurpose == PickerPurpose.OFFLINE_DOWNLOAD) {
-                "Download 20-Mi Region"
+                "Download ${FormatUtils.formatRadiusShort(unit = state.measurementUnit)} Region"
             } else {
                 "Choose Riding Area"
             },
@@ -375,7 +391,16 @@ fun SingletrackApp(
                     viewModel.selectCustomLocation(place)
                 }
             },
-            onDismiss = { pickerPurpose = PickerPurpose.NONE }
+            onDismiss = { pickerPurpose = PickerPurpose.NONE },
+            measurementUnit = state.measurementUnit
+        )
+    }
+
+    if (showSettingsDialog) {
+        UnitSettingsDialog(
+            currentUnit = state.measurementUnit,
+            onSelectUnit = viewModel::setMeasurementUnit,
+            onDismiss = { showSettingsDialog = false }
         )
     }
 }

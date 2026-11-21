@@ -1,15 +1,24 @@
 package com.example.data.repository
 
 import com.example.data.remote.OverpassElement
+import com.example.domain.model.ElevationPoint
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
+import com.example.domain.model.TrailElevationProfile
 import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+data class SampledRoutePoint(
+    val segmentIndex: Int,
+    val distanceMiles: Double,
+    val point: GeoPoint
+)
 
 object GeoUtils {
     const val EARTH_RADIUS_MILES = 3958.7613
@@ -187,6 +196,7 @@ object GeoUtils {
             val bearing = bearingDegrees(originLat, originLon, centerLat, centerLon)
             val (difficulty, rawDiff) = parseDifficulty(tags)
             val lengthMiles = parseLengthMiles(tags, segments, el)
+            val taggedAscentFeet = parseElevationFeet(tags["ascent"] ?: tags["climb"])
             val displayName = rawName ?: buildFallbackName(tags, el.id)
 
             Trail(
@@ -211,7 +221,8 @@ object GeoUtils {
                 isDesignatedMtb = hasExplicitMtbTag,
                 geometry = flatGeom,
                 routeSegments = segments,
-                isOfflineCached = isOfflineCached
+                isOfflineCached = isOfflineCached,
+                elevationGainFeet = taggedAscentFeet
             )
         }
 
@@ -269,13 +280,161 @@ object GeoUtils {
                     primary.copy(
                         lengthMiles = combinedLength,
                         geometry = mergedGeometry,
-                        routeSegments = if (allSegments.isNotEmpty()) allSegments else primary.routeSegments
+                        routeSegments = if (allSegments.isNotEmpty()) allSegments else primary.routeSegments,
+                        elevationGainFeet = primary.elevationGainFeet
+                            ?: cluster.mapNotNull { it.elevationGainFeet }.maxOrNull()
                     )
                 )
             }
         }
 
         return result.sortedBy { it.distanceFromUserMiles }
+    }
+
+    fun parseElevationFeet(raw: String?): Int? {
+        if (raw.isNullOrBlank()) return null
+        val cleaned = raw.trim().lowercase(Locale.US).replace(",", "")
+        val number = Regex("""(-?[0-9]+(?:\.[0-9]+)?)""")
+            .find(cleaned)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toDoubleOrNull()
+            ?: return null
+        if (number <= 0.0) return null
+        return if (cleaned.contains("ft") || cleaned.contains("'")) {
+            number.roundToInt()
+        } else {
+            (number * 3.28084).roundToInt()
+        }
+    }
+
+    fun sampleRouteWithDistances(
+        segments: List<List<GeoPoint>>,
+        maxSamples: Int = 36
+    ): List<SampledRoutePoint> {
+        val validSegments = segments.filter { it.size >= 2 }
+        if (validSegments.isEmpty()) return emptyList()
+
+        val segLengths = validSegments.map { polylineLengthMiles(it) }
+        val totalLen = segLengths.sum()
+        val sampled = mutableListOf<SampledRoutePoint>()
+        var cumulativeBaseDist = 0.0
+
+        validSegments.forEachIndexed { segIdx, seg ->
+            val segLen = segLengths[segIdx]
+            val targetForSeg = if (totalLen > 0.0) {
+                ((segLen / totalLen) * maxSamples).roundToInt().coerceIn(2, maxSamples)
+            } else {
+                2
+            }
+
+            if (seg.size <= targetForSeg) {
+                var running = cumulativeBaseDist
+                seg.forEachIndexed { idx, pt ->
+                    if (idx > 0) {
+                        running += haversineMiles(seg[idx - 1].lat, seg[idx - 1].lon, pt.lat, pt.lon)
+                    }
+                    sampled.add(SampledRoutePoint(segIdx, running, pt))
+                }
+            } else {
+                val cumDists = DoubleArray(seg.size)
+                for (i in 1 until seg.size) {
+                    cumDists[i] = cumDists[i - 1] + haversineMiles(
+                        seg[i - 1].lat,
+                        seg[i - 1].lon,
+                        seg[i].lat,
+                        seg[i].lon
+                    )
+                }
+                val totalSegDist = cumDists.last()
+                for (k in 0 until targetForSeg) {
+                    val targetDist = if (targetForSeg == 1) 0.0 else totalSegDist * k / (targetForSeg - 1)
+                    var segPos = 0
+                    while (segPos < cumDists.lastIndex && cumDists[segPos + 1] < targetDist) {
+                        segPos++
+                    }
+                    val point = if (segPos >= seg.lastIndex || cumDists[segPos + 1] == cumDists[segPos]) {
+                        seg[segPos]
+                    } else {
+                        val frac = ((targetDist - cumDists[segPos]) / (cumDists[segPos + 1] - cumDists[segPos]))
+                            .coerceIn(0.0, 1.0)
+                        GeoPoint(
+                            lat = seg[segPos].lat + (seg[segPos + 1].lat - seg[segPos].lat) * frac,
+                            lon = seg[segPos].lon + (seg[segPos + 1].lon - seg[segPos].lon) * frac
+                        )
+                    }
+                    sampled.add(SampledRoutePoint(segIdx, cumulativeBaseDist + targetDist, point))
+                }
+            }
+            cumulativeBaseDist += segLen
+        }
+
+        return sampled
+    }
+
+    fun buildElevationProfile(
+        sampledPoints: List<SampledRoutePoint>,
+        elevationsMeters: List<Double?>,
+        sourceLabel: String = "DEM Elevation Profile"
+    ): TrailElevationProfile? {
+        if (sampledPoints.size < 2 || elevationsMeters.size != sampledPoints.size) return null
+
+        val validEntries = sampledPoints.indices.mapNotNull { idx ->
+            val meters = elevationsMeters[idx] ?: return@mapNotNull null
+            if (!meters.isFinite()) return@mapNotNull null
+            sampledPoints[idx] to (meters * 3.28084)
+        }
+        if (validEntries.size < 2) return null
+
+        val profilePoints = validEntries.map { (sp, elevFt) ->
+            ElevationPoint(distanceMiles = sp.distanceMiles, elevationFeet = elevFt)
+        }
+
+        val minFt = validEntries.minOf { it.second }.roundToInt()
+        val maxFt = validEntries.maxOf { it.second }.roundToInt()
+
+        var totalGainFt = 0.0
+        var totalLossFt = 0.0
+        var maxGradePct = 0
+
+        val bySegment = validEntries.groupBy { it.first.segmentIndex }
+        for ((_, entries) in bySegment) {
+            if (entries.size < 2) continue
+            var anchorFt = entries.first().second
+            val noiseThresholdFt = 5.0
+
+            for (i in 1 until entries.size) {
+                val currFt = entries[i].second
+                val diff = currFt - anchorFt
+                if (diff >= noiseThresholdFt) {
+                    totalGainFt += diff
+                    anchorFt = currFt
+                } else if (diff <= -noiseThresholdFt) {
+                    totalLossFt += -diff
+                    anchorFt = currFt
+                }
+
+                val prevSp = entries[i - 1].first
+                val currSp = entries[i].first
+                val segDistMiles = currSp.distanceMiles - prevSp.distanceMiles
+                if (segDistMiles >= 0.015) {
+                    val riseFeet = kotlin.math.abs(currFt - entries[i - 1].second)
+                    val runFeet = segDistMiles * 5280.0
+                    val grade = ((riseFeet / runFeet) * 100.0).roundToInt().coerceIn(0, 45)
+                    if (grade > maxGradePct) maxGradePct = grade
+                }
+            }
+        }
+
+        return TrailElevationProfile(
+            elevationGainFeet = totalGainFt.roundToInt(),
+            elevationLossFeet = totalLossFt.roundToInt(),
+            minElevationFeet = minFt,
+            maxElevationFeet = maxFt,
+            maxGradePercent = maxGradePct,
+            points = profilePoints,
+            sourceLabel = sourceLabel
+        )
     }
 
     private fun buildFallbackName(tags: Map<String, String>, id: Long): String {

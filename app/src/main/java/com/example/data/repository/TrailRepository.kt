@@ -4,6 +4,7 @@ import com.example.data.local.CachedTrailEntity
 import com.example.data.local.GeometrySerializer
 import com.example.data.local.OfflineRegionEntity
 import com.example.data.local.OfflineTrailDao
+import com.example.data.remote.ElevationClient
 import com.example.data.remote.NominatimClient
 import com.example.data.remote.OverpassClient
 import com.example.data.remote.OverpassElement
@@ -13,11 +14,13 @@ import com.example.domain.model.LocationPlace
 import com.example.domain.model.OfflineRegion
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
+import com.example.domain.model.TrailElevationProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 data class TrailScanResult(
     val trails: List<Trail>,
@@ -29,6 +32,8 @@ data class TrailScanResult(
 class TrailRepository(
     private val offlineTrailDao: OfflineTrailDao
 ) {
+    private val elevationMemoryCache = ConcurrentHashMap<String, TrailElevationProfile>()
+
     fun observeOfflineRegions(): Flow<List<OfflineRegion>> {
         return offlineTrailDao.observeRegions().map { list ->
             list.map { it.toDomain() }
@@ -99,6 +104,61 @@ class TrailRepository(
         }
     }
 
+    suspend fun fetchTrailElevation(trail: Trail): TrailElevationProfile? = withContext(Dispatchers.IO) {
+        trail.elevationProfile?.let { return@withContext it }
+        elevationMemoryCache[trail.osmKey]?.let { return@withContext it }
+
+        val cachedEntity = offlineTrailDao.findCachedTrailByKey(trail.osmKey)
+        if (cachedEntity != null && cachedEntity.elevationProfileEncoded.isNotBlank()) {
+            val decoded = GeometrySerializer.decodeElevationProfile(cachedEntity.elevationProfileEncoded)
+            if (decoded != null) {
+                elevationMemoryCache[trail.osmKey] = decoded
+                return@withContext decoded
+            }
+        }
+
+        val segments = when {
+            trail.routeSegments.any { it.size >= 2 } -> trail.routeSegments
+            trail.geometry.size >= 2 -> listOf(trail.geometry)
+            else -> emptyList()
+        }
+        val sampled = GeoUtils.sampleRouteWithDistances(segments, maxSamples = 36)
+        if (sampled.size < 2) return@withContext null
+
+        val profile = try {
+            val lats = sampled.joinToString(",") { String.format(Locale.US, "%.5f", it.point.lat) }
+            val lons = sampled.joinToString(",") { String.format(Locale.US, "%.5f", it.point.lon) }
+            val resp = ElevationClient.service.getOpenMeteoElevations(latitudes = lats, longitudes = lons)
+            GeoUtils.buildElevationProfile(sampled, resp.elevation, sourceLabel = "DEM Elevation Profile")
+        } catch (_: Exception) {
+            null
+        } ?: try {
+            val locations = sampled.joinToString("|") {
+                String.format(Locale.US, "%.5f,%.5f", it.point.lat, it.point.lon)
+            }
+            val resp = ElevationClient.service.getOpenTopoDataElevations(locations = locations)
+            GeoUtils.buildElevationProfile(
+                sampled,
+                resp.results.map { it.elevation },
+                sourceLabel = "SRTM 30m Elevation Profile"
+            )
+        } catch (_: Exception) {
+            null
+        }
+
+        if (profile != null) {
+            elevationMemoryCache[trail.osmKey] = profile
+            if (cachedEntity != null) {
+                offlineTrailDao.updateCachedTrailElevation(
+                    osmKey = trail.osmKey,
+                    gainFeet = profile.elevationGainFeet,
+                    profileEncoded = GeometrySerializer.encodeElevationProfile(profile)
+                )
+            }
+        }
+        profile
+    }
+
     suspend fun downloadRegionForOffline(
         regionName: String,
         centerLat: Double,
@@ -143,6 +203,7 @@ class TrailRepository(
                     emptyList()
                 }
                 val encodedGeom = GeometrySerializer.encodeSegments(segmentsToSave)
+                val cachedProfile = elevationMemoryCache[trail.osmKey] ?: trail.elevationProfile
                 CachedTrailEntity(
                     regionId = regionId,
                     osmKey = trail.osmKey,
@@ -161,7 +222,9 @@ class TrailRepository(
                     oneway = trail.oneway,
                     uphillScale = trail.uphillScale,
                     isDesignatedMtb = trail.isDesignatedMtb,
-                    geometryEncoded = encodedGeom
+                    geometryEncoded = encodedGeom,
+                    elevationGainFeet = cachedProfile?.elevationGainFeet ?: trail.elevationGainFeet,
+                    elevationProfileEncoded = cachedProfile?.let { GeometrySerializer.encodeElevationProfile(it) } ?: ""
                 )
             }
 
@@ -210,6 +273,7 @@ class TrailRepository(
             val difficulty = TrailDifficulty.entries.firstOrNull { it.name == entity.difficultyName }
                 ?: TrailDifficulty.UNRATED
             val segments = GeometrySerializer.decodeSegments(entity.geometryEncoded)
+            val decodedProfile = GeometrySerializer.decodeElevationProfile(entity.elevationProfileEncoded)
             Trail(
                 osmKey = entity.osmKey,
                 osmType = entity.osmType,
@@ -232,7 +296,9 @@ class TrailRepository(
                 isDesignatedMtb = entity.isDesignatedMtb,
                 geometry = segments.flatten(),
                 routeSegments = segments,
-                isOfflineCached = true
+                isOfflineCached = true,
+                elevationGainFeet = decodedProfile?.elevationGainFeet ?: entity.elevationGainFeet,
+                elevationProfile = decodedProfile
             )
         }.sortedBy { it.distanceFromUserMiles }
     }

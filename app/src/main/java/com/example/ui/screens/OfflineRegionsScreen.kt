@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -42,6 +43,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.LocationPlace
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
 import com.example.ui.components.FormatUtils
 
@@ -49,8 +51,10 @@ import com.example.ui.components.FormatUtils
 fun OfflineRegionsScreen(
     regions: List<OfflineRegion>,
     activeLocation: LocationPlace?,
+    measurementUnit: MeasurementUnit,
     isDownloadingRegion: Boolean,
     downloadingRegionName: String?,
+    onOpenSettings: () -> Unit,
     onDownloadCurrentArea: () -> Unit,
     onOpenRegionPicker: () -> Unit,
     onOpenOfflineRegion: (OfflineRegion) -> Unit,
@@ -67,13 +71,29 @@ fun OfflineRegionsScreen(
     ) {
         item(key = "header") {
             Column {
-                Text(
-                    text = "Offline Trail Regions",
-                    style = MaterialTheme.typography.headlineMedium
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Offline Trail Regions",
+                        style = MaterialTheme.typography.headlineMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = onOpenSettings,
+                        modifier = Modifier.testTag("offline_settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "Measurement units settings"
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Download any 20-mile region including trail ratings and GPS route shapes so you can navigate without cell service.",
+                    text = "Download any ${FormatUtils.formatRadiusAdjective(unit = measurementUnit).lowercase()} region including trail ratings and GPS route shapes so you can navigate without cell service.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -101,7 +121,7 @@ fun OfflineRegionsScreen(
                                 strokeWidth = 2.5.dp
                             )
                             Text(
-                                text = "Downloading 20-mi trails & geometries for ${downloadingRegionName ?: "region"}…",
+                                text = "Downloading ${FormatUtils.formatRadiusShort(unit = measurementUnit)} trails & geometries for ${downloadingRegionName ?: "region"}…",
                                 style = MaterialTheme.typography.titleSmall
                             )
                         }
@@ -114,7 +134,7 @@ fun OfflineRegionsScreen(
                         ) {
                             Icon(Icons.Filled.CloudDownload, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Download ${activeLocation.name} (20 mi)")
+                            Text("Download ${activeLocation.name} (${FormatUtils.formatRadiusShort(unit = measurementUnit)})")
                         }
                     }
 

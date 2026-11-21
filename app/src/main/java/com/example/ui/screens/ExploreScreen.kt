@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -71,15 +72,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailSortOrder
 import com.example.domain.model.TrailViewMode
 import com.example.ui.components.DifficultyBadge
+import com.example.ui.components.FormatUtils
 import com.example.ui.components.TrailRadarMap
 import com.example.ui.theme.PineDeep
 import com.example.ui.viewmodel.MainUiState
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,6 +89,7 @@ fun ExploreScreen(
     state: MainUiState,
     onRequestLocationPermission: () -> Unit,
     onOpenLocationPicker: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRefreshTrails: () -> Unit,
     onDownloadRegion: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
@@ -97,6 +100,7 @@ fun ExploreScreen(
     onExpandFullScreenMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val unit = state.measurementUnit
     var sortMenuExpanded by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -142,13 +146,13 @@ fun ExploreScreen(
                             color = Color.White
                         )
                         Text(
-                            text = "Mountain Bike Trails • 20-Mile Radius",
+                            text = "Mountain Bike Trails • ${FormatUtils.formatRadiusAdjective(unit = unit)} Radius",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.84f)
                         )
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         IconButton(
                             onClick = onRefreshTrails,
                             modifier = Modifier.testTag("refresh_trails_button")
@@ -166,6 +170,16 @@ fun ExploreScreen(
                             Icon(
                                 imageVector = Icons.Filled.LocationOn,
                                 contentDescription = "Change riding area",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier.testTag("settings_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Settings,
+                                contentDescription = "Measurement units settings",
                                 tint = Color.White
                             )
                         }
@@ -202,7 +216,7 @@ fun ExploreScreen(
                             text = when {
                                 state.isLocating -> "Acquiring GPS fix…"
                                 state.activeLocation != null -> state.activeLocation.name
-                                else -> "Set location to scan 20 mi"
+                                else -> "Set location to scan ${FormatUtils.formatRadiusShort(unit = unit)}"
                             },
                             style = MaterialTheme.typography.labelLarge,
                             color = Color.White,
@@ -280,6 +294,7 @@ fun ExploreScreen(
             LocationPermissionPromptCard(
                 reason = state.locationUnavailableReason,
                 hasPermission = state.hasLocationPermission,
+                measurementUnit = unit,
                 onRequestPermission = onRequestLocationPermission,
                 onRetryGps = onRefreshTrails,
                 onOpenLocationPicker = onOpenLocationPicker,
@@ -464,7 +479,7 @@ fun ExploreScreen(
                             text = if (state.isLocating) {
                                 "Locating your position…"
                             } else {
-                                "Scanning OpenStreetMap trails within 20 miles…"
+                                "Scanning OpenStreetMap trails within ${FormatUtils.formatRadiusLong(unit = unit)}…"
                             },
                             style = MaterialTheme.typography.bodyLarge
                         )
@@ -515,6 +530,7 @@ fun ExploreScreen(
                     },
                     onOpenLocationPicker = onOpenLocationPicker,
                     hasAnyTrails = state.trails.isNotEmpty(),
+                    measurementUnit = unit,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(20.dp)
@@ -528,6 +544,7 @@ fun ExploreScreen(
                     onOpenTrailDetail = onOpenTrailDetail,
                     onToggleFullScreen = onExpandFullScreenMap,
                     initialSelectedTrail = state.selectedTrail,
+                    measurementUnit = unit,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp)
@@ -546,7 +563,7 @@ fun ExploreScreen(
                     if (state.usedSingletrackFallback) {
                         item(key = "fallback_notice") {
                             Text(
-                                text = "Showing nearby mapped singletrack & unpaved bike paths within 20 miles.",
+                                text = "Showing nearby mapped singletrack & unpaved bike paths within ${FormatUtils.formatRadiusLong(unit = unit)}.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -561,6 +578,7 @@ fun ExploreScreen(
                         TrailCard(
                             trail = trail,
                             isSelected = state.selectedTrail?.osmKey == trail.osmKey,
+                            measurementUnit = unit,
                             onClick = { onOpenTrailDetail(trail) }
                         )
                     }
@@ -576,6 +594,7 @@ fun ExploreScreen(
 private fun TrailCard(
     trail: Trail,
     isSelected: Boolean,
+    measurementUnit: MeasurementUnit,
     onClick: () -> Unit
 ) {
     Card(
@@ -606,12 +625,7 @@ private fun TrailCard(
                 ) {
                     DifficultyBadge(difficulty = trail.difficulty)
                     Text(
-                        text = String.format(
-                            Locale.US,
-                            "%.1f mi %s",
-                            trail.distanceFromUserMiles,
-                            trail.bearingCardinal
-                        ),
+                        text = "${FormatUtils.formatDistance(trail.distanceFromUserMiles, measurementUnit)} ${trail.bearingCardinal}",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.secondary
                     )
@@ -652,9 +666,16 @@ private fun TrailCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = String.format(Locale.US, "%.1f mi trail", len),
+                            text = "${FormatUtils.formatDistance(len, measurementUnit)} trail",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    trail.elevationGainFeet?.let { gainFt ->
+                        Text(
+                            text = "• ${FormatUtils.formatElevation(gainFt, measurementUnit, prefix = "+")}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.secondary
                         )
                     }
                     trail.networkName?.takeIf { it.isNotBlank() }?.let { net ->
@@ -682,6 +703,7 @@ private fun TrailCard(
 private fun LocationPermissionPromptCard(
     reason: String?,
     hasPermission: Boolean,
+    measurementUnit: MeasurementUnit,
     onRequestPermission: () -> Unit,
     onRetryGps: () -> Unit,
     onOpenLocationPicker: () -> Unit,
@@ -712,7 +734,7 @@ private fun LocationPermissionPromptCard(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = reason ?: stringResource(R.string.permission_body),
+                text = reason ?: "Grant foreground location access to scan OpenStreetMap for mountain biking trails within ${FormatUtils.formatRadiusLong(unit = measurementUnit)} of your current position.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -747,6 +769,7 @@ private fun LocationPermissionPromptCard(
 @Composable
 private fun EmptyTrailsCard(
     hasAnyTrails: Boolean,
+    measurementUnit: MeasurementUnit,
     onClearFilter: () -> Unit,
     onOpenLocationPicker: () -> Unit,
     modifier: Modifier = Modifier
@@ -776,7 +799,7 @@ private fun EmptyTrailsCard(
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = if (hasAnyTrails) {
-                        "Clear your search or difficulty filter to see all trails in the 20-mile radius."
+                        "Clear your search or difficulty filter to see all trails in the ${FormatUtils.formatRadiusAdjective(unit = measurementUnit).lowercase()} radius."
                     } else {
                         stringResource(R.string.empty_trails_body)
                     },
