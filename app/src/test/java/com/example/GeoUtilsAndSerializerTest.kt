@@ -1,5 +1,8 @@
 package com.example
 
+import com.example.data.bluetooth.CscMeasurementParser
+import com.example.data.bluetooth.CscParserState
+import com.example.data.export.GpxExporter
 import com.example.data.local.GeometrySerializer
 import com.example.data.repository.GeoUtils
 import com.example.data.repository.SampledRoutePoint
@@ -9,11 +12,13 @@ import com.example.domain.model.ElevationPoint
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.PhysicalEffortRating
+import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideSample
 import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailElevationProfile
 import com.example.ui.components.FormatUtils
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -74,7 +79,7 @@ class GeoUtilsAndSerializerTest {
     }
 
     @Test
-    fun geometrySerializer_roundTripsPointsAndRideSamples() {
+    fun geometrySerializer_roundTripsPointsAndRideSamplesIncludingCadenceAndLegacyFormat() {
         val points = listOf(
             GeoPoint(38.57331, -109.54981),
             GeoPoint(38.58120, -109.54110)
@@ -94,13 +99,106 @@ class GeoUtilsAndSerializerTest {
         assertEquals(38.59500, decodedSegments[1][1].lat, 0.0001)
 
         val samples = listOf(
-            RideSample(38.57331, -109.54981, 1225.4, 5.42f, 1700000000000L),
-            RideSample(38.58120, -109.54110, null, null, 1700000010000L)
+            RideSample(38.57331, -109.54981, 1225.4, 5.42f, 1700000000000L, cadenceRpm = 84),
+            RideSample(38.58120, -109.54110, null, null, 1700000010000L, cadenceRpm = null)
         )
         val decodedSamples = GeometrySerializer.decodeSamples(GeometrySerializer.encodeSamples(samples))
         assertEquals(2, decodedSamples.size)
         assertEquals(1225.4, decodedSamples[0].altitudeMeters ?: 0.0, 0.1)
         assertEquals(5.42f, decodedSamples[0].speedMps ?: 0f, 0.01f)
+        assertEquals(84, decodedSamples[0].cadenceRpm)
+        assertNull(decodedSamples[1].cadenceRpm)
+
+        // Legacy 5-column samples remain compatible
+        val legacyRaw = "38.57331,-109.54981,1225.4,5.42,1700000000000"
+        val legacyDecoded = GeometrySerializer.decodeSamples(legacyRaw)
+        assertEquals(1, legacyDecoded.size)
+        assertEquals(1225.4, legacyDecoded[0].altitudeMeters ?: 0.0, 0.1)
+        assertNull(legacyDecoded[0].cadenceRpm)
+    }
+
+    @Test
+    fun cscMeasurementParser_parsesWheelSpeedDistanceCrankCadenceAndRollover() {
+        // Combo packet: flags=0x03 (wheel + crank)
+        // Packet 1: wheelRevs=100, wheelTime=65000, crankRevs=65534, crankTime=65000
+        fun comboPacket(wheelRevs: Long, wheelTime: Int, crankRevs: Int, crankTime: Int): ByteArray {
+            return byteArrayOf(
+                0x03,
+                (wheelRevs and 0xFF).toByte(),
+                ((wheelRevs shr 8) and 0xFF).toByte(),
+                ((wheelRevs shr 16) and 0xFF).toByte(),
+                ((wheelRevs shr 24) and 0xFF).toByte(),
+                (wheelTime and 0xFF).toByte(),
+                ((wheelTime shr 8) and 0xFF).toByte(),
+                (crankRevs and 0xFF).toByte(),
+                ((crankRevs shr 8) and 0xFF).toByte(),
+                (crankTime and 0xFF).toByte(),
+                ((crankTime shr 8) and 0xFF).toByte()
+            )
+        }
+
+        val first = CscMeasurementParser.parse(
+            bytes = comboPacket(100L, 65000, 65534, 65000),
+            previousState = CscParserState(),
+            wheelCircumferenceMm = 2000 // 2.0 m per rev
+        )
+        assertNotNull(first)
+        assertNull(first!!.speedMps)
+        assertEquals(0.0, first.incrementalDistanceMeters, 0.001)
+        assertNull(first.cadenceRpm)
+
+        // Second packet 2.0s later (2048 ticks -> 65000 + 2048 wraps around 65536 to 1512)
+        // +5 wheel revs = 10m in 2s = 5.0 m/s
+        // +3 crank revs (65534 + 3 wraps around 65536 to 1) in 2s = 90 rpm
+        val second = CscMeasurementParser.parse(
+            bytes = comboPacket(105L, 1512, 1, 1512),
+            previousState = first.nextState,
+            wheelCircumferenceMm = 2000
+        )
+        assertNotNull(second)
+        assertTrue(second!!.wheelDataPresent)
+        assertTrue(second.crankDataPresent)
+        assertEquals(5.0, second.speedMps ?: 0.0, 0.05)
+        assertEquals(10.0, second.incrementalDistanceMeters, 0.01)
+        assertEquals(90, second.cadenceRpm)
+    }
+
+    @Test
+    fun gpxExporter_buildsValidGpx11WithCadenceAndFallbackRoutePoints() {
+        val rideWithSamples = RecordedRide(
+            id = "ride-1",
+            title = "Whole Enchilada & Loop",
+            trailName = "Whole Enchilada",
+            startTimeMillis = 1700000000000L,
+            endTimeMillis = 1700000060000L,
+            durationSeconds = 60L,
+            distanceMiles = 1.25,
+            avgSpeedMph = 12.5,
+            maxSpeedMph = 18.0,
+            elevationGainFeet = 320.0,
+            routePoints = listOf(GeoPoint(38.5733, -109.5498), GeoPoint(38.5800, -109.5400)),
+            samples = listOf(
+                RideSample(38.5733, -109.5498, 1250.5, 5.2f, 1700000000000L, cadenceRpm = 88),
+                RideSample(38.5800, -109.5400, 1275.0, 6.1f, 1700000060000L, cadenceRpm = null)
+            ),
+            avgCadenceRpm = 88,
+            maxCadenceRpm = 94,
+            sensorName = "Garmin CSC 2"
+        )
+
+        val xml = GpxExporter.buildGpxXml(rideWithSamples)
+        assertTrue(xml.contains("<gpx version=\"1.1\""))
+        assertTrue(xml.contains("<name>Whole Enchilada &amp; Loop</name>"))
+        assertTrue(xml.contains("<trkpt lat=\"38.573300\" lon=\"-109.549800\">"))
+        assertTrue(xml.contains("<ele>1250.5</ele>"))
+        assertTrue(xml.contains("<gpxtpx:cad>88</gpxtpx:cad>"))
+        assertTrue(xml.contains("Garmin CSC 2"))
+
+        // Fallback when samples list is empty uses routePoints
+        val fallbackRide = rideWithSamples.copy(samples = emptyList(), avgCadenceRpm = null)
+        val fallbackXml = GpxExporter.buildGpxXml(fallbackRide)
+        assertTrue(fallbackXml.contains("<trkpt lat=\"38.580000\" lon=\"-109.540000\">"))
+        assertFalse(fallbackXml.contains("<gpxtpx:cad>"))
     }
 
     @Test

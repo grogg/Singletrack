@@ -69,5 +69,8 @@ data class RideEntity(
     val routeGeometryEncoded: String,
     val samplesEncoded: String,
     val syncedToHealthConnect: Boolean,
-    val healthConnectSessionId: String?
+    val healthConnectSessionId: String?,
+    val avgCadenceRpm: Int? = null,
+    val maxCadenceRpm: Int? = null,
+    val sensorName: String? = null
 )

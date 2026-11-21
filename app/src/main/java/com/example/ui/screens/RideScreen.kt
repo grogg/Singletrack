@@ -1,6 +1,6 @@
 package com.example.ui.screens
 
-import android.content.Intent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,14 +14,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
@@ -34,8 +40,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +53,8 @@ import androidx.compose.ui.unit.dp
 import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
+import com.example.domain.model.BleConnectionStatus
+import com.example.domain.model.BleSensorUiState
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
@@ -56,6 +66,7 @@ fun RideScreen(
     activeRide: ActiveRideMetrics,
     recordedRides: List<RecordedRide>,
     measurementUnit: MeasurementUnit,
+    bleSensorState: BleSensorUiState,
     healthConnectStatus: HealthConnectStatus,
     autoSyncEnabled: Boolean,
     syncingRideId: String?,
@@ -72,6 +83,8 @@ fun RideScreen(
     onResumeRide: () -> Unit,
     onFinishRide: () -> Unit,
     onDiscardRide: () -> Unit,
+    onOpenRideDetail: (RecordedRide) -> Unit,
+    onShareRideGpx: (RecordedRide) -> Unit,
     onSyncRide: (RecordedRide) -> Unit,
     onDeleteRide: (String) -> Unit,
     modifier: Modifier = Modifier
@@ -105,13 +118,13 @@ fun RideScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Settings,
-                            contentDescription = "Measurement units settings"
+                            contentDescription = "Settings and Bluetooth sensors"
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Record live GPS MTB rides and sync workouts with Google Fit via Health Connect.",
+                    text = "Record live GPS MTB rides, connect Bluetooth cycling sensors, view routes, and export GPX tracks.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -171,7 +184,7 @@ fun RideScreen(
                                     healthConnectStatus.availability == HealthConnectAvailability.UPDATE_REQUIRED ->
                                         "Install or update Health Connect from Google Play to sync rides with Google Fit."
                                     healthConnectStatus.availability == HealthConnectAvailability.UNAVAILABLE ->
-                                        "Rides are saved locally on-device. Health Connect is required on Android to sync with Google Fit."
+                                        "Rides are saved locally on-device and can be exported to GPX anytime."
                                     else ->
                                         "Grant Health Connect permissions so Google Fit automatically displays your recorded MTB rides."
                                 },
@@ -254,7 +267,7 @@ fun RideScreen(
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -263,7 +276,8 @@ fun RideScreen(
                     ) {
                         Text(
                             text = activeRide.targetTrailName?.let { "Riding: $it" } ?: "Live GPS Ride",
-                            style = MaterialTheme.typography.titleLarge
+                            style = MaterialTheme.typography.titleLarge,
+                            modifier = Modifier.weight(1f)
                         )
                         Text(
                             text = when (activeRide.status) {
@@ -277,6 +291,69 @@ fun RideScreen(
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         )
+                    }
+
+                    // Bluetooth Cycling Sensor Banner
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                        Icons.Filled.BluetoothConnected
+                                    } else {
+                                        Icons.Filled.Bluetooth
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                                val sensorLabel = when {
+                                    bleSensorState.pairedSensor != null -> {
+                                        val suffix = when (bleSensorState.connectionStatus) {
+                                            BleConnectionStatus.CONNECTED -> "Connected"
+                                            BleConnectionStatus.CONNECTING -> "Connecting…"
+                                            BleConnectionStatus.DISCONNECTED -> "Disconnected"
+                                            BleConnectionStatus.ERROR -> "Retry needed"
+                                        }
+                                        "${bleSensorState.pairedSensor.name} ($suffix)"
+                                    }
+                                    else -> "No BT speed/cadence sensor paired"
+                                }
+                                Text(
+                                    text = sensorLabel,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = onOpenSettings,
+                                modifier = Modifier.testTag("ride_sensor_settings_button")
+                            ) {
+                                Text(if (bleSensorState.pairedSensor != null) "Manage" else "Pair Sensor")
+                            }
+                        }
                     }
 
                     // Live Route Breadcrumb Canvas
@@ -313,7 +390,13 @@ fun RideScreen(
                             )
                         )
                         RideMetricCell(
-                            label = "Speed",
+                            label = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED &&
+                                bleSensorState.hasWheelCapability
+                            ) {
+                                "Speed (BLE)"
+                            } else {
+                                "Speed"
+                            },
                             value = FormatUtils.formatSpeed(
                                 activeRide.currentSpeedMph,
                                 measurementUnit
@@ -326,6 +409,17 @@ fun RideScreen(
                                 measurementUnit
                             )
                         )
+                        if (activeRide.currentCadenceRpm != null ||
+                            bleSensorState.hasCadenceCapability ||
+                            bleSensorState.pairedSensor != null
+                        ) {
+                            val cadenceVal = activeRide.currentCadenceRpm
+                                ?: bleSensorState.liveCadenceRpm
+                            RideMetricCell(
+                                label = "Cadence",
+                                value = cadenceVal?.let { "$it rpm" } ?: "--"
+                            )
+                        }
                     }
 
                     // Controls
@@ -430,7 +524,7 @@ fun RideScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "No rides recorded yet. Hit Start Ride above—or tap Record Ride on any trail—to log distance, route, and elevation.",
+                        text = "No rides recorded yet. Hit Start Ride above—or tap Record Ride on any trail—to log distance, route, cadence, and elevation.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(16.dp)
@@ -444,6 +538,8 @@ fun RideScreen(
                     measurementUnit = measurementUnit,
                     isSyncing = syncingRideId == ride.id,
                     canSyncHealthConnect = healthConnectStatus.permissionsGranted,
+                    onOpenDetail = { onOpenRideDetail(ride) },
+                    onShareGpx = { onShareRideGpx(ride) },
                     onSync = {
                         if (healthConnectStatus.permissionsGranted) {
                             onSyncRide(ride)
@@ -479,6 +575,8 @@ private fun RecordedRideCard(
     measurementUnit: MeasurementUnit,
     isSyncing: Boolean,
     canSyncHealthConnect: Boolean,
+    onOpenDetail: () -> Unit,
+    onShareGpx: () -> Unit,
     onSync: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -487,6 +585,7 @@ private fun RecordedRideCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpenDetail)
             .testTag("ride_card_${ride.id}")
     ) {
         Column(
@@ -506,10 +605,40 @@ private fun RecordedRideCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = onDelete) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = onShareGpx,
+                        modifier = Modifier.testTag("share_gpx_card_${ride.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "Share ride as GPX file"
+                        )
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = "Delete ride"
+                        )
+                    }
+                }
+            }
+
+            ride.sensorName?.takeIf { it.isNotBlank() }?.let { sensor ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Icon(
-                        imageVector = Icons.Filled.DeleteOutline,
-                        contentDescription = "Delete ride"
+                        imageVector = Icons.Filled.Bluetooth,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                    Text(
+                        text = "Sensor: $sensor",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary
                     )
                 }
             }
@@ -540,6 +669,28 @@ private fun RecordedRideCard(
                     "Elev",
                     FormatUtils.formatElevation(ride.elevationGainFeet, measurementUnit)
                 )
+                if (ride.avgCadenceRpm != null) {
+                    RideMetricCell("Cadence", "${ride.avgCadenceRpm} rpm")
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedButton(
+                    onClick = onOpenDetail,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("view_ride_route_${ride.id}")
+                ) {
+                    Icon(Icons.Filled.Map, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("View Route & GPX")
+                    Spacer(modifier = Modifier.width(2.dp))
+                    Icon(Icons.Filled.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
             }
 
             if (ride.syncedToHealthConnect) {

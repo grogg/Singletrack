@@ -1,20 +1,33 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.BluetoothConnected
+import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,96 +37,395 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.example.domain.model.BleConnectionStatus
+import com.example.domain.model.BleSensorUiState
+import com.example.domain.model.DiscoveredBleSensor
 import com.example.domain.model.MeasurementUnit
+import com.example.domain.model.WheelCircumferencePreset
 
 @Composable
 fun UnitSettingsDialog(
     currentUnit: MeasurementUnit,
     onSelectUnit: (MeasurementUnit) -> Unit,
+    bleSensorState: BleSensorUiState = BleSensorUiState(),
+    onRequestBleScan: () -> Unit = {},
+    onStopBleScan: () -> Unit = {},
+    onPairBleSensor: (DiscoveredBleSensor) -> Unit = {},
+    onConnectPairedBle: () -> Unit = {},
+    onForgetBleSensor: () -> Unit = {},
+    onSelectWheelCircumference: (Int) -> Unit = {},
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Filled.Settings,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-        },
-        title = {
-            Text(
-                text = "Measurement Units",
-                style = MaterialTheme.typography.headlineSmall
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Choose how trail distances, ride speeds, and elevation profiles are displayed.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                MeasurementUnit.entries.forEach { unit ->
-                    val selected = unit == currentUnit
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable {
-                                onSelectUnit(unit)
-                                onDismiss()
-                            }
-                            .testTag("unit_option_${unit.name.lowercase()}")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            RadioButton(
-                                selected = selected,
-                                onClick = {
-                                    onSelectUnit(unit)
-                                    onDismiss()
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 520.dp)
+                .testTag("unit_settings_dialog")
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Settings,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Settings & Sensors",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(weight = 1f, fill = false)
+                        .heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // Section 1: Measurement Units
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Measurement Units",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = "Choose how trail distances, ride speeds, and elevation profiles are displayed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        MeasurementUnit.entries.forEach { unit ->
+                            val selected = unit == currentUnit
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                                 },
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onSelectUnit(unit) }
+                                    .testTag("unit_option_${unit.name.lowercase()}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    RadioButton(
+                                        selected = selected,
+                                        onClick = { onSelectUnit(unit) },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = unit.label,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = unit.summary,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    // Section 2: Bluetooth Cycling Speed & Cadence Sensors
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                    Icons.Filled.BluetoothConnected
+                                } else {
+                                    Icons.Filled.Bluetooth
+                                },
+                                contentDescription = null,
+                                tint = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                },
+                                modifier = Modifier.size(20.dp)
                             )
-                            Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Bluetooth Speed & Cadence",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+
+                        Text(
+                            text = "Pair a Bluetooth LE Cycling Speed & Cadence (CSC) hub/crank sensor. Live wheel speed, distance, and cadence override GPS estimates during recordings when active.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        bleSensorState.pairedSensor?.let { paired ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("ble_paired_sensor_card")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = paired.name,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = paired.address,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        val statusLabel = when (bleSensorState.connectionStatus) {
+                                            BleConnectionStatus.CONNECTED -> "Connected"
+                                            BleConnectionStatus.CONNECTING -> "Connecting…"
+                                            BleConnectionStatus.DISCONNECTED -> "Disconnected"
+                                            BleConnectionStatus.ERROR -> "Error"
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(50),
+                                            color = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                            } else {
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                            }
+                                        ) {
+                                            Text(
+                                                text = statusLabel,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+
+                                    if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                        val speedPreview = bleSensorState.liveSpeedMph?.let {
+                                            FormatUtils.formatSpeed(it, currentUnit)
+                                        } ?: "--"
+                                        val cadencePreview = bleSensorState.liveCadenceRpm?.let {
+                                            "$it rpm"
+                                        } ?: "-- rpm"
+                                        Text(
+                                            text = "Live sensor: Speed $speedPreview • Cadence $cadencePreview",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (bleSensorState.connectionStatus != BleConnectionStatus.CONNECTED &&
+                                            bleSensorState.connectionStatus != BleConnectionStatus.CONNECTING
+                                        ) {
+                                            Button(
+                                                onClick = onConnectPairedBle,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("ble_connect_button")
+                                            ) {
+                                                Text("Connect")
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = onForgetBleSensor,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("ble_forget_button")
+                                        ) {
+                                            Text("Forget")
+                                        }
+                                    }
+                                }
+                            }
+
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = unit.label,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = unit.summary,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    text = "Wheel Size (for speed sensor)",
+                                    style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    WheelCircumferencePreset.entries.forEach { preset ->
+                                        val isSelected = paired.wheelCircumferenceMm == preset.circumferenceMm
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = { onSelectWheelCircumference(preset.circumferenceMm) },
+                                            label = { Text(preset.shortLabel) },
+                                            modifier = Modifier.testTag("wheel_preset_${preset.circumferenceMm}")
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        when {
+                            !bleSensorState.isBluetoothSupported -> {
+                                Text(
+                                    text = "Bluetooth Low Energy hardware is unavailable on this device.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+
+                            !bleSensorState.isBluetoothEnabled -> {
+                                Text(
+                                    text = "Bluetooth is turned off. Enable Bluetooth in Android settings to scan for sensors.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+
+                        if (bleSensorState.isBluetoothSupported) {
+                            if (bleSensorState.isScanning) {
+                                OutlinedButton(
+                                    onClick = onStopBleScan,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("ble_scan_button")
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Stop Scanning")
+                                }
+                            } else {
+                                Button(
+                                    onClick = onRequestBleScan,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("ble_scan_button")
+                                ) {
+                                    Icon(Icons.Filled.BluetoothSearching, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        if (bleSensorState.pairedSensor != null) {
+                                            "Scan for Different Sensor"
+                                        } else {
+                                            "Scan for Speed / Cadence Sensors"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        bleSensorState.statusMessage?.takeIf { it.isNotBlank() }?.let { msg ->
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (bleSensorState.discoveredSensors.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Discovered Sensors (${bleSensorState.discoveredSensors.size})",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                bleSensorState.discoveredSensors.forEach { sensor ->
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = sensor.name,
+                                                    style = MaterialTheme.typography.titleSmall
+                                                )
+                                                Text(
+                                                    text = "${sensor.address} • ${sensor.rssi} dBm",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Button(
+                                                onClick = { onPairBleSensor(sensor) },
+                                                modifier = Modifier.testTag("ble_pair_${sensor.address}")
+                                            ) {
+                                                Text("Pair")
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("unit_settings_done_button")
+                    ) {
+                        Text("Done")
+                    }
+                }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.testTag("unit_settings_done_button")
-            ) {
-                Text("Done")
-            }
-        },
-        modifier = Modifier.testTag("unit_settings_dialog")
-    )
+        }
+    }
 }

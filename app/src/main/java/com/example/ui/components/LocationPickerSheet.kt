@@ -41,6 +41,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
+import java.util.Locale
 
 private val POPULAR_MTB_HUBS = listOf(
     LocationPlace("Moab, UT", 38.5733, -109.5498),
@@ -145,7 +146,7 @@ fun LocationPickerSheet(
                         ListItem(
                             headlineContent = { Text(place.name) },
                             supportingContent = {
-                                Text(String.format("%.3f°, %.3f°", place.lat, place.lon))
+                                Text(String.format(Locale.US, "%.3f°, %.3f°", place.lat, place.lon))
                             },
                             leadingContent = {
                                 Icon(

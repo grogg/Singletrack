@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -257,16 +258,16 @@ fun TrailDetailScreen(
                 FilledTonalButton(
                     onClick = {
                         val label = Uri.encode(trail.name)
-                        val uri = Uri.parse(
+                        val uri =
                             "geo:${trail.centerLat},${trail.centerLon}?q=${trail.centerLat},${trail.centerLon}($label)"
-                        )
+                                .toUri()
                         val intent = Intent(Intent.ACTION_VIEW, uri)
                         if (intent.resolveActivity(context.packageManager) != null) {
                             context.startActivity(intent)
                         } else {
-                            val webUri = Uri.parse(
+                            val webUri =
                                 "https://www.openstreetmap.org/?mlat=${trail.centerLat}&mlon=${trail.centerLon}#map=15/${trail.centerLat}/${trail.centerLon}"
-                            )
+                                    .toUri()
                             context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
                         }
                     },

@@ -52,14 +52,16 @@ object GeometrySerializer {
         return samples.joinToString(separator = ";") { sample ->
             val alt = sample.altitudeMeters?.let { String.format(Locale.US, "%.1f", it) } ?: ""
             val spd = sample.speedMps?.let { String.format(Locale.US, "%.2f", it) } ?: ""
+            val cad = sample.cadenceRpm?.toString() ?: ""
             String.format(
                 Locale.US,
-                "%.5f,%.5f,%s,%s,%d",
+                "%.5f,%.5f,%s,%s,%d,%s",
                 sample.lat,
                 sample.lon,
                 alt,
                 spd,
-                sample.timestampMillis
+                sample.timestampMillis,
+                cad
             )
         }
     }
@@ -68,18 +70,20 @@ object GeometrySerializer {
         if (raw.isBlank()) return emptyList()
         return raw.split(";").mapNotNull { token ->
             val parts = token.split(",")
-            if (parts.size == 5) {
+            if (parts.size >= 5) {
                 val lat = parts[0].toDoubleOrNull() ?: return@mapNotNull null
                 val lon = parts[1].toDoubleOrNull() ?: return@mapNotNull null
                 val alt = parts[2].toDoubleOrNull()
                 val spd = parts[3].toFloatOrNull()
                 val ts = parts[4].toLongOrNull() ?: return@mapNotNull null
+                val cad = parts.getOrNull(5)?.toIntOrNull()
                 RideSample(
                     lat = lat,
                     lon = lon,
                     altitudeMeters = alt,
                     speedMps = spd,
-                    timestampMillis = ts
+                    timestampMillis = ts,
+                    cadenceRpm = cad
                 )
             } else {
                 null

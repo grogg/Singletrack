@@ -2,7 +2,7 @@ package com.example.data.health
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
@@ -217,9 +217,9 @@ class HealthConnectSyncManager(private val context: Context) {
     }
 
     fun buildInstallHealthConnectIntent(): Intent {
-        val uri = Uri.parse(
+        val uri =
             "market://details?id=com.google.android.apps.healthdata&url=healthconnect%3A%2F%2Fonboarding"
-        )
+                .toUri()
         return Intent(Intent.ACTION_VIEW, uri).apply {
             setPackage("com.android.vending")
             putExtra("overlay", true)

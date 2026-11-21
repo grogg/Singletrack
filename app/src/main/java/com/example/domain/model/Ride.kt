@@ -5,7 +5,8 @@ data class RideSample(
     val lon: Double,
     val altitudeMeters: Double? = null,
     val speedMps: Float? = null,
-    val timestampMillis: Long
+    val timestampMillis: Long,
+    val cadenceRpm: Int? = null
 )
 
 data class RecordedRide(
@@ -22,7 +23,10 @@ data class RecordedRide(
     val routePoints: List<GeoPoint>,
     val samples: List<RideSample> = emptyList(),
     val syncedToHealthConnect: Boolean = false,
-    val healthConnectSessionId: String? = null
+    val healthConnectSessionId: String? = null,
+    val avgCadenceRpm: Int? = null,
+    val maxCadenceRpm: Int? = null,
+    val sensorName: String? = null
 )
 
 enum class RideRecordingStatus {
@@ -41,5 +45,54 @@ data class ActiveRideMetrics(
     val maxSpeedMph: Double = 0.0,
     val elevationGainFeet: Double = 0.0,
     val points: List<GeoPoint> = emptyList(),
-    val samples: List<RideSample> = emptyList()
+    val samples: List<RideSample> = emptyList(),
+    val currentCadenceRpm: Int? = null,
+    val avgCadenceRpm: Int? = null,
+    val maxCadenceRpm: Int? = null,
+    val sensorSourceLabel: String? = null
+)
+
+enum class WheelCircumferencePreset(
+    val shortLabel: String,
+    val fullLabel: String,
+    val circumferenceMm: Int
+) {
+    MTB_29("29\" MTB", "29\" × 2.25 MTB (2288 mm)", 2288),
+    MTB_27_5("27.5\" MTB", "27.5\" × 2.25 MTB (2180 mm)", 2180),
+    GRAVEL_700C("700c Gravel", "700 × 38c Gravel (2180 mm / 2130 mm)", 2130),
+    MTB_26("26\" MTB", "26\" × 2.1 MTB (2070 mm)", 2070)
+}
+
+data class DiscoveredBleSensor(
+    val name: String,
+    val address: String,
+    val rssi: Int
+)
+
+data class PairedBleSensor(
+    val name: String,
+    val address: String,
+    val wheelCircumferenceMm: Int = WheelCircumferencePreset.MTB_29.circumferenceMm
+)
+
+enum class BleConnectionStatus {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    ERROR
+}
+
+data class BleSensorUiState(
+    val isBluetoothSupported: Boolean = true,
+    val isBluetoothEnabled: Boolean = false,
+    val hasBluetoothPermissions: Boolean = false,
+    val pairedSensor: PairedBleSensor? = null,
+    val connectionStatus: BleConnectionStatus = BleConnectionStatus.DISCONNECTED,
+    val isScanning: Boolean = false,
+    val discoveredSensors: List<DiscoveredBleSensor> = emptyList(),
+    val liveSpeedMph: Double? = null,
+    val liveCadenceRpm: Int? = null,
+    val hasWheelCapability: Boolean = false,
+    val hasCadenceCapability: Boolean = false,
+    val statusMessage: String? = null
 )

@@ -45,7 +45,10 @@ class RideRepository(
         routePoints = GeometrySerializer.decode(routeGeometryEncoded),
         samples = GeometrySerializer.decodeSamples(samplesEncoded),
         syncedToHealthConnect = syncedToHealthConnect,
-        healthConnectSessionId = healthConnectSessionId
+        healthConnectSessionId = healthConnectSessionId,
+        avgCadenceRpm = avgCadenceRpm,
+        maxCadenceRpm = maxCadenceRpm,
+        sensorName = sensorName
     )
 
     private fun RecordedRide.toEntity(): RideEntity = RideEntity(
@@ -62,6 +65,9 @@ class RideRepository(
         routeGeometryEncoded = GeometrySerializer.encode(routePoints),
         samplesEncoded = GeometrySerializer.encodeSamples(samples),
         syncedToHealthConnect = syncedToHealthConnect,
-        healthConnectSessionId = healthConnectSessionId
+        healthConnectSessionId = healthConnectSessionId,
+        avgCadenceRpm = avgCadenceRpm,
+        maxCadenceRpm = maxCadenceRpm,
+        sensorName = sensorName
     )
 }

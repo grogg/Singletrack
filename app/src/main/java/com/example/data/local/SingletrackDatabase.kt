@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [OfflineRegionEntity::class, CachedTrailEntity::class, RideEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class SingletrackDatabase : RoomDatabase() {
@@ -26,6 +26,14 @@ abstract class SingletrackDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE recorded_rides ADD COLUMN avgCadenceRpm INTEGER")
+                db.execSQL("ALTER TABLE recorded_rides ADD COLUMN maxCadenceRpm INTEGER")
+                db.execSQL("ALTER TABLE recorded_rides ADD COLUMN sensorName TEXT")
+            }
+        }
+
         fun getInstance(context: Context): SingletrackDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -33,7 +41,7 @@ abstract class SingletrackDatabase : RoomDatabase() {
                     SingletrackDatabase::class.java,
                     "singletrack_offline.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

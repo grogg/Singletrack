@@ -3,8 +3,11 @@ package com.example.ui.viewmodel
 import android.app.Application
 import android.content.Context
 import android.location.Location
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.bluetooth.BleCyclingSensorManager
+import com.example.data.bluetooth.CscSensorReading
 import com.example.data.health.HealthConnectSyncManager
 import com.example.data.local.SingletrackDatabase
 import com.example.data.location.DeviceLocationResult
@@ -14,6 +17,7 @@ import com.example.data.repository.GeoUtils
 import com.example.data.repository.RideRepository
 import com.example.data.repository.TrailRepository
 import com.example.domain.model.ActiveRideMetrics
+import com.example.domain.model.DiscoveredBleSensor
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
@@ -45,11 +49,13 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private val rideTracker = RideTracker(application)
     private val prefs = application.getSharedPreferences("singletrack_prefs", Context.MODE_PRIVATE)
     val healthConnectSyncManager = HealthConnectSyncManager(application)
+    val bleSensorManager = BleCyclingSensorManager(application)
 
     private val _uiState = MutableStateFlow(
         MainUiState(
             measurementUnit = loadSavedUnit(),
-            hasLocationPermission = locationProvider.hasLocationPermission()
+            hasLocationPermission = locationProvider.hasLocationPermission(),
+            bleSensorState = bleSensorManager.sensorState.value
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -58,12 +64,19 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private var rideGpsJob: Job? = null
     private var detailLoadJob: Job? = null
     private var lastAltitudeMeters: Double? = null
+    private var rideCadenceSum: Long = 0L
+    private var rideCadenceCount: Int = 0
+    private var usedBleSensorInRide: Boolean = false
 
     init {
         observeLocalData()
+        observeBleSensors()
         refreshHealthConnectStatus()
         if (locationProvider.hasLocationPermission()) {
             locateAndScanCurrentPosition()
+        }
+        if (bleSensorManager.sensorState.value.pairedSensor != null && bleSensorManager.hasRequiredPermissions()) {
+            bleSensorManager.connectPairedSensor()
         }
     }
 
@@ -82,7 +95,29 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             rideRepository.observeRecordedRides().collect { rides ->
-                _uiState.update { it.copy(recordedRides = rides) }
+                _uiState.update { state ->
+                    val updatedSelected = state.selectedRide?.let { sel ->
+                        rides.firstOrNull { it.id == sel.id }
+                    }
+                    state.copy(
+                        recordedRides = rides,
+                        selectedRide = updatedSelected,
+                        isFullScreenRideMap = if (updatedSelected == null) false else state.isFullScreenRideMap
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeBleSensors() {
+        viewModelScope.launch {
+            bleSensorManager.sensorState.collect { sensorUi ->
+                _uiState.update { it.copy(bleSensorState = sensorUi) }
+            }
+        }
+        viewModelScope.launch {
+            bleSensorManager.readings.collect { reading ->
+                processBleSensorReading(reading)
             }
         }
     }
@@ -91,11 +126,86 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(currentDestination = destination) }
         if (destination == AppDestination.RIDE) {
             refreshHealthConnectStatus()
+            bleSensorManager.refreshCapabilities()
         }
     }
 
+    fun refreshBleCapabilities() {
+        bleSensorManager.refreshCapabilities()
+    }
+
+    fun onBluetoothPermissionsResult(granted: Boolean, scanAfterGrant: Boolean = false) {
+        bleSensorManager.refreshCapabilities()
+        if (granted) {
+            if (scanAfterGrant) {
+                bleSensorManager.startScan()
+            } else if (bleSensorManager.sensorState.value.pairedSensor != null) {
+                bleSensorManager.connectPairedSensor()
+            }
+        } else {
+            _uiState.update {
+                it.copy(snackbarMessage = "Bluetooth permission is needed to scan or connect cycling sensors.")
+            }
+        }
+    }
+
+    fun startBleSensorScan() {
+        bleSensorManager.startScan()
+    }
+
+    fun stopBleSensorScan() {
+        bleSensorManager.stopScan()
+    }
+
+    fun pairBleSensor(sensor: DiscoveredBleSensor) {
+        bleSensorManager.pairAndConnect(sensor)
+    }
+
+    fun connectPairedBleSensor() {
+        bleSensorManager.connectPairedSensor()
+    }
+
+    fun forgetBleSensor() {
+        bleSensorManager.forgetPairedSensor()
+        _uiState.update { it.copy(snackbarMessage = "Bluetooth cycling sensor unpaired") }
+    }
+
+    fun setWheelCircumferenceMm(circumferenceMm: Int) {
+        bleSensorManager.updateWheelCircumference(circumferenceMm)
+    }
+
+    fun openRideDetail(ride: RecordedRide) {
+        _uiState.update {
+            it.copy(
+                selectedRide = ride,
+                isFullScreenRideMap = false
+            )
+        }
+    }
+
+    fun closeRideDetail() {
+        _uiState.update {
+            it.copy(
+                selectedRide = null,
+                isFullScreenRideMap = false
+            )
+        }
+    }
+
+    fun openFullScreenRideMap() {
+        _uiState.update { it.copy(isFullScreenRideMap = true) }
+    }
+
+    fun closeFullScreenRideMap() {
+        _uiState.update { it.copy(isFullScreenRideMap = false) }
+    }
+
+    fun notifyMessage(message: String) {
+        _uiState.update { it.copy(snackbarMessage = message) }
+    }
+
     fun setMeasurementUnit(unit: MeasurementUnit) {
-        prefs.edit().putString(KEY_MEASUREMENT_UNIT, unit.name).apply()
+        prefs.edit { putString(KEY_MEASUREMENT_UNIT, unit.name) }
         _uiState.update { it.copy(measurementUnit = unit) }
     }
 
@@ -553,13 +663,21 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         lastAltitudeMeters = null
+        rideCadenceSum = 0L
+        rideCadenceCount = 0
+        usedBleSensorInRide = false
+        val paired = bleSensorManager.sensorState.value.pairedSensor
+        if (paired != null && bleSensorManager.hasRequiredPermissions()) {
+            bleSensorManager.connectPairedSensor()
+        }
         val now = System.currentTimeMillis()
         _uiState.update {
             it.copy(
                 activeRide = ActiveRideMetrics(
                     status = RideRecordingStatus.RECORDING,
                     targetTrailName = trailName,
-                    startTimeMillis = now
+                    startTimeMillis = now,
+                    sensorSourceLabel = paired?.name
                 )
             )
         }
@@ -573,7 +691,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(
                 activeRide = state.activeRide.copy(
                     status = RideRecordingStatus.PAUSED,
-                    currentSpeedMph = 0.0
+                    currentSpeedMph = 0.0,
+                    currentCadenceRpm = null
                 )
             )
         }
@@ -593,6 +712,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
         lastAltitudeMeters = null
+        rideCadenceSum = 0L
+        rideCadenceCount = 0
+        usedBleSensorInRide = false
         _uiState.update {
             it.copy(
                 activeRide = ActiveRideMetrics(),
@@ -608,6 +730,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
         lastAltitudeMeters = null
+        rideCadenceSum = 0L
+        rideCadenceCount = 0
+        val recordedWithBleSensor = usedBleSensorInRide
+        usedBleSensorInRide = false
 
         val endTime = System.currentTimeMillis()
         val durationSec = current.elapsedSeconds.coerceAtLeast(1L)
@@ -636,7 +762,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             routePoints = current.points,
             samples = current.samples,
             syncedToHealthConnect = false,
-            healthConnectSessionId = null
+            healthConnectSessionId = null,
+            avgCadenceRpm = current.avgCadenceRpm,
+            maxCadenceRpm = current.maxCadenceRpm,
+            sensorName = if (recordedWithBleSensor) current.sensorSourceLabel else null
         )
 
         _uiState.update { it.copy(activeRide = ActiveRideMetrics()) }
@@ -747,8 +876,63 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun processBleSensorReading(reading: CscSensorReading) {
+        _uiState.update { state ->
+            val current = state.activeRide
+            if (current.status != RideRecordingStatus.RECORDING) return@update state
+            usedBleSensorInRide = true
+
+            var nextDistance = current.distanceMiles
+            var nextSpeedMph = current.currentSpeedMph
+            var nextMaxSpeedMph = current.maxSpeedMph
+
+            if (reading.wheelDataPresent && reading.speedMps != null) {
+                nextDistance += reading.incrementalDistanceMeters / 1609.344
+                nextSpeedMph = reading.speedMps * 2.23694
+                if (nextSpeedMph > nextMaxSpeedMph) {
+                    nextMaxSpeedMph = nextSpeedMph
+                }
+            }
+
+            var nextCadence = current.currentCadenceRpm
+            var nextAvgCadence = current.avgCadenceRpm
+            var nextMaxCadence = current.maxCadenceRpm
+
+            if (reading.crankDataPresent && reading.cadenceRpm != null) {
+                nextCadence = reading.cadenceRpm
+                if (reading.cadenceRpm > 0) {
+                    rideCadenceSum += reading.cadenceRpm
+                    rideCadenceCount += 1
+                    nextAvgCadence = (rideCadenceSum / rideCadenceCount).toInt()
+                    nextMaxCadence = maxOf(current.maxCadenceRpm ?: 0, reading.cadenceRpm)
+                }
+            }
+
+            state.copy(
+                activeRide = current.copy(
+                    distanceMiles = nextDistance,
+                    currentSpeedMph = nextSpeedMph,
+                    maxSpeedMph = nextMaxSpeedMph,
+                    currentCadenceRpm = nextCadence,
+                    avgCadenceRpm = nextAvgCadence,
+                    maxCadenceRpm = nextMaxCadence,
+                    sensorSourceLabel = reading.sensorName
+                )
+            )
+        }
+    }
+
     private fun processNewRideLocation(location: Location) {
         if (location.hasAccuracy() && location.accuracy > 50f) return
+
+        val now = System.currentTimeMillis()
+        val usingWheelSensor = bleSensorManager.hasFreshWheelReading(now)
+        val freshCadence = bleSensorManager.getLatestFreshCadence(now)
+        val freshWheelSpeedMps = if (usingWheelSensor) {
+            bleSensorManager.sensorState.value.liveSpeedMph?.let { (it / 2.23694).toFloat() }
+        } else {
+            null
+        }
 
         _uiState.update { state ->
             val current = state.activeRide
@@ -764,7 +948,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
             // Filter tiny stationary GPS jitter (< ~10 ft) after first point
             val shouldAppendPoint = prevPoint == null || segmentMiles >= 0.002
-            val updatedDistance = if (prevPoint != null && segmentMiles >= 0.002) {
+            val updatedDistance = if (!usingWheelSensor && prevPoint != null && segmentMiles >= 0.002) {
                 current.distanceMiles + segmentMiles
             } else {
                 current.distanceMiles
@@ -787,18 +971,21 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            val speedMph = if (location.hasSpeed()) {
-                (location.speed * 2.23694).coerceAtLeast(0.0)
-            } else {
-                current.currentSpeedMph
+            val speedMph = when {
+                usingWheelSensor -> state.bleSensorState.liveSpeedMph ?: current.currentSpeedMph
+                location.hasSpeed() -> (location.speed * 2.23694).coerceAtLeast(0.0)
+                else -> current.currentSpeedMph
             }
+
+            val sampleSpeedMps = freshWheelSpeedMps ?: if (location.hasSpeed()) location.speed else null
 
             val sample = RideSample(
                 lat = location.latitude,
                 lon = location.longitude,
                 altitudeMeters = if (location.hasAltitude()) location.altitude else null,
-                speedMps = if (location.hasSpeed()) location.speed else null,
-                timestampMillis = System.currentTimeMillis()
+                speedMps = sampleSpeedMps,
+                timestampMillis = now,
+                cadenceRpm = freshCadence
             )
 
             state.copy(
@@ -860,6 +1047,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
+        detailLoadJob?.cancel()
+        bleSensorManager.release()
     }
 
     companion object {

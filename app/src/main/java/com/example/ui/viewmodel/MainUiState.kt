@@ -3,6 +3,7 @@ package com.example.ui.viewmodel
 import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
+import com.example.domain.model.BleSensorUiState
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
@@ -50,6 +51,9 @@ data class MainUiState(
     val placeSearchError: String? = null,
     val activeRide: ActiveRideMetrics = ActiveRideMetrics(),
     val recordedRides: List<RecordedRide> = emptyList(),
+    val selectedRide: RecordedRide? = null,
+    val isFullScreenRideMap: Boolean = false,
+    val bleSensorState: BleSensorUiState = BleSensorUiState(),
     val healthConnectStatus: HealthConnectStatus = HealthConnectStatus(
         availability = HealthConnectAvailability.UNAVAILABLE,
         permissionsGranted = false

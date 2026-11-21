@@ -51,14 +51,19 @@ import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.bluetooth.BleCyclingSensorManager
+import com.example.data.export.GpxExporter
 import com.example.data.health.HealthConnectSyncManager
+import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
 import com.example.ui.components.FormatUtils
 import com.example.ui.components.LocationPickerSheet
+import com.example.ui.components.RecordedRideTopoMap
 import com.example.ui.components.TrailRadarMap
 import com.example.ui.components.UnitSettingsDialog
 import com.example.ui.screens.ExploreScreen
 import com.example.ui.screens.OfflineRegionsScreen
+import com.example.ui.screens.RideDetailScreen
 import com.example.ui.screens.RideScreen
 import com.example.ui.screens.TrailDetailScreen
 import com.example.ui.theme.SingletrackTheme
@@ -92,6 +97,8 @@ fun SingletrackApp(
     val snackbarHostState = remember { SnackbarHostState() }
     var pickerPurpose by remember { mutableStateOf(PickerPurpose.NONE) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var pendingBleScanAfterPermission by remember { mutableStateOf(false) }
+    var pendingGpxExportRide by remember { mutableStateOf<RecordedRide?>(null) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -99,6 +106,33 @@ fun SingletrackApp(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
             permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         viewModel.onLocationPermissionResult(granted)
+    }
+
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = BleCyclingSensorManager.requiredPermissions().all { perm ->
+            permissions[perm] == true
+        }
+        val shouldScan = pendingBleScanAfterPermission
+        pendingBleScanAfterPermission = false
+        viewModel.onBluetoothPermissionsResult(granted, scanAfterGrant = shouldScan)
+    }
+
+    val saveGpxLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/gpx+xml")
+    ) { uri ->
+        val targetRide = pendingGpxExportRide
+        pendingGpxExportRide = null
+        if (uri != null && targetRide != null) {
+            runCatching {
+                GpxExporter.writeGpxToUri(context, uri, targetRide)
+            }.onSuccess {
+                viewModel.notifyMessage("Saved ${GpxExporter.buildSuggestedFileName(targetRide)}")
+            }.onFailure { err ->
+                viewModel.notifyMessage("Failed to save GPX: ${err.localizedMessage ?: "Write error"}")
+            }
+        }
     }
 
     val healthConnectPermissionLauncher = rememberLauncherForActivityResult(
@@ -115,6 +149,12 @@ fun SingletrackApp(
         }
     }
 
+    LaunchedEffect(showSettingsDialog) {
+        if (showSettingsDialog) {
+            viewModel.refreshBleCapabilities()
+        }
+    }
+
     val requestLocationPermission: () -> Unit = {
         locationPermissionLauncher.launch(
             arrayOf(
@@ -124,18 +164,53 @@ fun SingletrackApp(
         )
     }
 
+    val shareRideGpx: (RecordedRide) -> Unit = { ride ->
+        runCatching {
+            val intent = GpxExporter.buildShareGpxIntent(context, ride)
+            context.startActivity(intent)
+        }.onFailure { err ->
+            viewModel.notifyMessage("Could not share GPX: ${err.localizedMessage ?: "No compatible app"}")
+        }
+    }
+
+    val saveRideGpxFile: (RecordedRide) -> Unit = { ride ->
+        pendingGpxExportRide = ride
+        saveGpxLauncher.launch(GpxExporter.buildSuggestedFileName(ride))
+    }
+
+    val requestBleScan: () -> Unit = {
+        if (viewModel.bleSensorManager.hasRequiredPermissions()) {
+            viewModel.startBleSensorScan()
+        } else {
+            pendingBleScanAfterPermission = true
+            bluetoothPermissionLauncher.launch(BleCyclingSensorManager.requiredPermissions())
+        }
+    }
+
+    val connectPairedBle: () -> Unit = {
+        if (viewModel.bleSensorManager.hasRequiredPermissions()) {
+            viewModel.connectPairedBleSensor()
+        } else {
+            pendingBleScanAfterPermission = false
+            bluetoothPermissionLauncher.launch(BleCyclingSensorManager.requiredPermissions())
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTabletOrWide = maxWidth >= 600.dp
         val isExpanded = maxWidth >= 840.dp
-        val showCompactDetail = !isExpanded &&
+        val showCompactTrailDetail = !isExpanded &&
             state.currentDestination == AppDestination.EXPLORE &&
             state.selectedTrail != null
+        val showCompactRideDetail = !isExpanded &&
+            state.currentDestination == AppDestination.RIDE &&
+            state.selectedRide != null
 
         Scaffold(
             contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
-                if (!isTabletOrWide && !showCompactDetail) {
+                if (!isTabletOrWide && !showCompactTrailDetail && !showCompactRideDetail) {
                     NavigationBar {
                         AppDestination.entries.forEach { dest ->
                             val selected = state.currentDestination == dest
@@ -193,7 +268,7 @@ fun SingletrackApp(
                     contentAlignment = Alignment.TopCenter
                 ) {
                     when {
-                        showCompactDetail && state.selectedTrail != null -> {
+                        showCompactTrailDetail && state.selectedTrail != null -> {
                             TrailDetailScreen(
                                 trail = state.selectedTrail!!,
                                 isLoadingGeometry = state.isLoadingTrailGeometry,
@@ -204,6 +279,31 @@ fun SingletrackApp(
                                 onOpenSettings = { showSettingsDialog = true },
                                 onRecordRideOnTrail = viewModel::startRideForTrail,
                                 onExpandOnTopoMap = { trail -> viewModel.openFullScreenMap(focusTrail = trail) }
+                            )
+                        }
+
+                        showCompactRideDetail && state.selectedRide != null -> {
+                            RideDetailScreen(
+                                ride = state.selectedRide!!,
+                                measurementUnit = state.measurementUnit,
+                                isSyncing = state.syncingRideId == state.selectedRide?.id,
+                                canSyncHealthConnect = state.healthConnectStatus.permissionsGranted,
+                                showBackNavigation = true,
+                                onBack = viewModel::closeRideDetail,
+                                onOpenSettings = { showSettingsDialog = true },
+                                onExpandFullScreenMap = viewModel::openFullScreenRideMap,
+                                onShareGpx = shareRideGpx,
+                                onSaveGpxFile = saveRideGpxFile,
+                                onSyncHealthConnect = { ride ->
+                                    if (state.healthConnectStatus.permissionsGranted) {
+                                        viewModel.syncRideToHealthConnect(ride)
+                                    } else {
+                                        healthConnectPermissionLauncher.launch(
+                                            HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                                        )
+                                    }
+                                },
+                                onDeleteRide = viewModel::deleteRide
                             )
                         }
 
@@ -288,50 +388,129 @@ fun SingletrackApp(
                         }
 
                         state.currentDestination == AppDestination.RIDE -> {
-                            RideScreen(
-                                activeRide = state.activeRide,
-                                recordedRides = state.recordedRides,
-                                measurementUnit = state.measurementUnit,
-                                healthConnectStatus = state.healthConnectStatus,
-                                autoSyncEnabled = state.autoSyncToHealthConnect,
-                                syncingRideId = state.syncingRideId,
-                                hasLocationPermission = state.hasLocationPermission,
-                                onOpenSettings = { showSettingsDialog = true },
-                                onRequestLocationPermission = requestLocationPermission,
-                                onConnectHealthConnect = {
-                                    healthConnectPermissionLauncher.launch(
-                                        HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                            if (isExpanded && state.selectedRide != null) {
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    RideScreen(
+                                        activeRide = state.activeRide,
+                                        recordedRides = state.recordedRides,
+                                        measurementUnit = state.measurementUnit,
+                                        bleSensorState = state.bleSensorState,
+                                        healthConnectStatus = state.healthConnectStatus,
+                                        autoSyncEnabled = state.autoSyncToHealthConnect,
+                                        syncingRideId = state.syncingRideId,
+                                        hasLocationPermission = state.hasLocationPermission,
+                                        onOpenSettings = { showSettingsDialog = true },
+                                        onRequestLocationPermission = requestLocationPermission,
+                                        onConnectHealthConnect = {
+                                            healthConnectPermissionLauncher.launch(
+                                                HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                                            )
+                                        },
+                                        onInstallHealthConnect = {
+                                            runCatching {
+                                                context.startActivity(
+                                                    viewModel.healthConnectSyncManager.buildInstallHealthConnectIntent()
+                                                )
+                                            }
+                                        },
+                                        onOpenHealthConnectSettings = {
+                                            runCatching {
+                                                context.startActivity(
+                                                    viewModel.healthConnectSyncManager.buildOpenHealthConnectSettingsIntent()
+                                                )
+                                            }
+                                        },
+                                        onOpenGoogleFit = {
+                                            viewModel.healthConnectSyncManager.buildOpenGoogleFitIntent()?.let {
+                                                context.startActivity(it)
+                                            }
+                                        },
+                                        onToggleAutoSync = viewModel::setAutoSyncToHealthConnect,
+                                        onStartRide = { viewModel.startRide() },
+                                        onPauseRide = viewModel::pauseRide,
+                                        onResumeRide = viewModel::resumeRide,
+                                        onFinishRide = viewModel::finishAndSaveRide,
+                                        onDiscardRide = viewModel::discardRide,
+                                        onOpenRideDetail = viewModel::openRideDetail,
+                                        onShareRideGpx = shareRideGpx,
+                                        onSyncRide = viewModel::syncRideToHealthConnect,
+                                        onDeleteRide = viewModel::deleteRide,
+                                        modifier = Modifier.weight(1f)
                                     )
-                                },
-                                onInstallHealthConnect = {
-                                    runCatching {
-                                        context.startActivity(
-                                            viewModel.healthConnectSyncManager.buildInstallHealthConnectIntent()
+                                    VerticalDivider()
+                                    RideDetailScreen(
+                                        ride = state.selectedRide!!,
+                                        measurementUnit = state.measurementUnit,
+                                        isSyncing = state.syncingRideId == state.selectedRide?.id,
+                                        canSyncHealthConnect = state.healthConnectStatus.permissionsGranted,
+                                        showBackNavigation = false,
+                                        onBack = viewModel::closeRideDetail,
+                                        onOpenSettings = { showSettingsDialog = true },
+                                        onExpandFullScreenMap = viewModel::openFullScreenRideMap,
+                                        onShareGpx = shareRideGpx,
+                                        onSaveGpxFile = saveRideGpxFile,
+                                        onSyncHealthConnect = { ride ->
+                                            if (state.healthConnectStatus.permissionsGranted) {
+                                                viewModel.syncRideToHealthConnect(ride)
+                                            } else {
+                                                healthConnectPermissionLauncher.launch(
+                                                    HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                                                )
+                                            }
+                                        },
+                                        onDeleteRide = viewModel::deleteRide,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            } else {
+                                RideScreen(
+                                    activeRide = state.activeRide,
+                                    recordedRides = state.recordedRides,
+                                    measurementUnit = state.measurementUnit,
+                                    bleSensorState = state.bleSensorState,
+                                    healthConnectStatus = state.healthConnectStatus,
+                                    autoSyncEnabled = state.autoSyncToHealthConnect,
+                                    syncingRideId = state.syncingRideId,
+                                    hasLocationPermission = state.hasLocationPermission,
+                                    onOpenSettings = { showSettingsDialog = true },
+                                    onRequestLocationPermission = requestLocationPermission,
+                                    onConnectHealthConnect = {
+                                        healthConnectPermissionLauncher.launch(
+                                            HealthConnectSyncManager.REQUIRED_PERMISSIONS
                                         )
-                                    }
-                                },
-                                onOpenHealthConnectSettings = {
-                                    runCatching {
-                                        context.startActivity(
-                                            viewModel.healthConnectSyncManager.buildOpenHealthConnectSettingsIntent()
-                                        )
-                                    }
-                                },
-                                onOpenGoogleFit = {
-                                    viewModel.healthConnectSyncManager.buildOpenGoogleFitIntent()?.let {
-                                        context.startActivity(it)
-                                    }
-                                },
-                                onToggleAutoSync = viewModel::setAutoSyncToHealthConnect,
-                                onStartRide = { viewModel.startRide() },
-                                onPauseRide = viewModel::pauseRide,
-                                onResumeRide = viewModel::resumeRide,
-                                onFinishRide = viewModel::finishAndSaveRide,
-                                onDiscardRide = viewModel::discardRide,
-                                onSyncRide = viewModel::syncRideToHealthConnect,
-                                onDeleteRide = viewModel::deleteRide,
-                                modifier = Modifier.widthIn(max = 760.dp)
-                            )
+                                    },
+                                    onInstallHealthConnect = {
+                                        runCatching {
+                                            context.startActivity(
+                                                viewModel.healthConnectSyncManager.buildInstallHealthConnectIntent()
+                                            )
+                                        }
+                                    },
+                                    onOpenHealthConnectSettings = {
+                                        runCatching {
+                                            context.startActivity(
+                                                viewModel.healthConnectSyncManager.buildOpenHealthConnectSettingsIntent()
+                                            )
+                                        }
+                                    },
+                                    onOpenGoogleFit = {
+                                        viewModel.healthConnectSyncManager.buildOpenGoogleFitIntent()?.let {
+                                            context.startActivity(it)
+                                        }
+                                    },
+                                    onToggleAutoSync = viewModel::setAutoSyncToHealthConnect,
+                                    onStartRide = { viewModel.startRide() },
+                                    onPauseRide = viewModel::pauseRide,
+                                    onResumeRide = viewModel::resumeRide,
+                                    onFinishRide = viewModel::finishAndSaveRide,
+                                    onDiscardRide = viewModel::discardRide,
+                                    onOpenRideDetail = viewModel::openRideDetail,
+                                    onShareRideGpx = shareRideGpx,
+                                    onSyncRide = viewModel::syncRideToHealthConnect,
+                                    onDeleteRide = viewModel::deleteRide,
+                                    modifier = Modifier.widthIn(max = 760.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -359,6 +538,17 @@ fun SingletrackApp(
                 onToggleFullScreen = viewModel::closeFullScreenMap,
                 initialSelectedTrail = state.selectedTrail,
                 measurementUnit = state.measurementUnit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        if (state.isFullScreenRideMap && state.selectedRide != null) {
+            BackHandler { viewModel.closeFullScreenRideMap() }
+            RecordedRideTopoMap(
+                ride = state.selectedRide!!,
+                measurementUnit = state.measurementUnit,
+                isFullScreen = true,
+                onToggleFullScreen = viewModel::closeFullScreenRideMap,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -400,7 +590,17 @@ fun SingletrackApp(
         UnitSettingsDialog(
             currentUnit = state.measurementUnit,
             onSelectUnit = viewModel::setMeasurementUnit,
-            onDismiss = { showSettingsDialog = false }
+            bleSensorState = state.bleSensorState,
+            onRequestBleScan = requestBleScan,
+            onStopBleScan = viewModel::stopBleSensorScan,
+            onPairBleSensor = viewModel::pairBleSensor,
+            onConnectPairedBle = connectPairedBle,
+            onForgetBleSensor = viewModel::forgetBleSensor,
+            onSelectWheelCircumference = viewModel::setWheelCircumferenceMm,
+            onDismiss = {
+                viewModel.stopBleSensorScan()
+                showSettingsDialog = false
+            }
         )
     }
 }
@@ -443,10 +643,10 @@ private fun DestinationIcon(
             ) {
                 Icon(
                     imageVector = if (selected) {
-                    Icons.AutoMirrored.Filled.DirectionsBike
-                } else {
-                    Icons.AutoMirrored.Outlined.DirectionsBike
-                },
+                        Icons.AutoMirrored.Filled.DirectionsBike
+                    } else {
+                        Icons.AutoMirrored.Outlined.DirectionsBike
+                    },
                     contentDescription = destination.label
                 )
             }
