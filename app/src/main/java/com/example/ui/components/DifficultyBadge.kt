@@ -1,0 +1,155 @@
+package com.example.ui.components
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.example.domain.model.TrailDifficulty
+import com.example.ui.theme.DifficultyAdvancedColor
+import com.example.ui.theme.DifficultyAdvancedDarkColor
+import com.example.ui.theme.DifficultyEasyColor
+import com.example.ui.theme.DifficultyExpertColor
+import com.example.ui.theme.DifficultyIntermediateColor
+import com.example.ui.theme.DifficultyUnratedColor
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+@Composable
+fun difficultyAccentColor(difficulty: TrailDifficulty): Color {
+    val isDark = isSystemInDarkTheme()
+    return when (difficulty) {
+        TrailDifficulty.EASY -> DifficultyEasyColor
+        TrailDifficulty.INTERMEDIATE -> DifficultyIntermediateColor
+        TrailDifficulty.ADVANCED -> if (isDark) DifficultyAdvancedDarkColor else DifficultyAdvancedColor
+        TrailDifficulty.EXPERT -> DifficultyExpertColor
+        TrailDifficulty.UNRATED -> DifficultyUnratedColor
+    }
+}
+
+@Composable
+fun DifficultySymbol(
+    difficulty: TrailDifficulty,
+    modifier: Modifier = Modifier,
+    symbolSize: Dp = 14.dp
+) {
+    val color = difficultyAccentColor(difficulty)
+    Canvas(
+        modifier = modifier
+            .size(symbolSize)
+            .semantics { contentDescription = "${difficulty.label} difficulty symbol" }
+    ) {
+        val w = size.width
+        val h = size.height
+        when (difficulty) {
+            TrailDifficulty.EASY -> {
+                drawCircle(color = color, radius = w * 0.44f)
+            }
+            TrailDifficulty.INTERMEDIATE -> {
+                val side = w * 0.78f
+                val inset = (w - side) / 2f
+                drawRect(
+                    color = color,
+                    topLeft = Offset(inset, inset),
+                    size = Size(side, side)
+                )
+            }
+            TrailDifficulty.ADVANCED -> {
+                val path = Path().apply {
+                    moveTo(w / 2f, h * 0.06f)
+                    lineTo(w * 0.94f, h / 2f)
+                    lineTo(w / 2f, h * 0.94f)
+                    lineTo(w * 0.06f, h / 2f)
+                    close()
+                }
+                drawPath(path, color = color)
+            }
+            TrailDifficulty.EXPERT -> {
+                val left = Path().apply {
+                    moveTo(w * 0.30f, h * 0.14f)
+                    lineTo(w * 0.54f, h / 2f)
+                    lineTo(w * 0.30f, h * 0.86f)
+                    lineTo(w * 0.06f, h / 2f)
+                    close()
+                }
+                val right = Path().apply {
+                    moveTo(w * 0.70f, h * 0.14f)
+                    lineTo(w * 0.94f, h / 2f)
+                    lineTo(w * 0.70f, h * 0.86f)
+                    lineTo(w * 0.46f, h / 2f)
+                    close()
+                }
+                drawPath(left, color = color)
+                drawPath(right, color = color)
+            }
+            TrailDifficulty.UNRATED -> {
+                drawCircle(color = color.copy(alpha = 0.25f), radius = w * 0.44f)
+                drawCircle(color = color, radius = w * 0.22f)
+            }
+        }
+    }
+}
+
+@Composable
+fun DifficultyBadge(
+    difficulty: TrailDifficulty,
+    modifier: Modifier = Modifier,
+    showFullLabel: Boolean = true
+) {
+    val accent = difficultyAccentColor(difficulty)
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(accent.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        DifficultySymbol(difficulty = difficulty, symbolSize = 12.dp)
+        Text(
+            text = if (showFullLabel) difficulty.label else difficulty.shortLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = accent
+        )
+    }
+}
+
+object FormatUtils {
+    fun formatDuration(totalSeconds: Long): String {
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+    }
+
+    fun formatBytes(bytes: Long): String {
+        return when {
+            bytes < 1024L -> "$bytes B"
+            bytes < 1024L * 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+            else -> String.format(Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
+        }
+    }
+
+    fun formatTimestamp(millis: Long): String {
+        val sdf = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
+        return sdf.format(Date(millis))
+    }
+}

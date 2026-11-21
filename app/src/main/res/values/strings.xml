@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">Singletrack</string>
+    <string name="hero_subtitle">20-Mile Trail Radar</string>
+    <string name="search_trails_hint">Search trails, parks, or surfaces…</string>
+    <string name="tab_list">Trail List</string>
+    <string name="tab_map">Topo Map</string>
+    <string name="action_refresh">Refresh GPS &amp; Trails</string>
+    <string name="action_change_location">Set Area</string>
+    <string name="action_directions">Directions to Trailhead</string>
+    <string name="action_share_trail">Share Trail</string>
+    <string name="permission_title">Find MTB Trails Around You</string>
+    <string name="permission_body">Grant foreground location access to scan OpenStreetMap for mountain biking trails within 20 miles of your current position.</string>
+    <string name="permission_cta">Enable Current Location</string>
+    <string name="manual_location_cta">Or Search a City / Trailhead</string>
+    <string name="empty_trails_title">No MTB Trails Found Nearby</string>
+    <string name="empty_trails_body">Try clearing your difficulty filter or searching a nearby mountain biking destination.</string>
+    <string name="cd_back">Navigate back</string>
+    <string name="cd_refresh">Refresh location and trails</string>
+    <string name="cd_search_clear">Clear search</string>
+    <string name="cd_location_pin">Current location</string>
+</resources>

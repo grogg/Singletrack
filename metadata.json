@@ -1,0 +1,6 @@
+{
+  "name": "Singletrack",
+  "description": "Discover mountain biking trails within a 20-mile radius of your current location",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
