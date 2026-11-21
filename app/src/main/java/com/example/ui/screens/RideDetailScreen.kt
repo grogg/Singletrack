@@ -6,6 +6,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Settings
@@ -62,11 +65,12 @@ import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
 import com.example.ui.components.FormatUtils
 import com.example.ui.components.RecordedRideTopoMap
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.ui.theme.Terracotta
 import com.example.ui.theme.TerracottaBright
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun RideDetailScreen(
     ride: RecordedRide,
@@ -92,6 +96,9 @@ fun RideDetailScreen(
     }
     val speedSamplesMph = remember(ride.samples) {
         ride.samples.mapNotNull { it.speedMps?.let { mps -> mps * 2.23694 } }
+    }
+    val hrSamples = remember(ride.samples) {
+        ride.samples.mapNotNull { it.heartRateBpm?.toDouble() }
     }
 
     Column(
@@ -155,9 +162,9 @@ fun RideDetailScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Row(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     ride.trailName?.takeIf { it.isNotBlank() }?.let { trail ->
                         Surface(
@@ -178,7 +185,9 @@ fun RideDetailScreen(
                                 Text(
                                     text = trail,
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -203,7 +212,36 @@ fun RideDetailScreen(
                                 Text(
                                     text = sensor,
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+
+                    ride.hrSensorName?.takeIf { it.isNotBlank() }?.let { hrSensor ->
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Favorite,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp),
+                                    tint = MaterialTheme.colorScheme.tertiary
+                                )
+                                Text(
+                                    text = hrSensor,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -264,7 +302,14 @@ fun RideDetailScreen(
                     value = FormatUtils.formatElevation(ride.elevationGainFeet, measurementUnit, prefix = "+"),
                     modifier = Modifier.weight(1f)
                 )
-                if (ride.avgCadenceRpm != null) {
+                if (ride.avgHeartRateBpm != null && ride.avgCadenceRpm == null) {
+                    val peakSuffix = ride.maxHeartRateBpm?.let { " (max $it)" } ?: ""
+                    RideDetailStatCard(
+                        label = "Avg Heart Rate",
+                        value = "${ride.avgHeartRateBpm} bpm$peakSuffix",
+                        modifier = Modifier.weight(1f)
+                    )
+                } else if (ride.avgCadenceRpm != null) {
                     val peakSuffix = ride.maxCadenceRpm?.let { " (max $it)" } ?: ""
                     RideDetailStatCard(
                         label = "Avg Cadence",
@@ -272,6 +317,25 @@ fun RideDetailScreen(
                         modifier = Modifier.weight(1f)
                     )
                 } else {
+                    RideDetailStatCard(
+                        label = "GPS Trackpoints",
+                        value = "${maxOf(ride.samples.size, ride.routePoints.size)} pts",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            if (ride.avgHeartRateBpm != null && ride.avgCadenceRpm != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val hrPeakSuffix = ride.maxHeartRateBpm?.let { " (max $it)" } ?: ""
+                    RideDetailStatCard(
+                        label = "Avg Heart Rate",
+                        value = "${ride.avgHeartRateBpm} bpm$hrPeakSuffix",
+                        modifier = Modifier.weight(1f)
+                    )
                     RideDetailStatCard(
                         label = "GPS Trackpoints",
                         value = "${maxOf(ride.samples.size, ride.routePoints.size)} pts",
@@ -304,6 +368,20 @@ fun RideDetailScreen(
                 )
             }
 
+            if (hrSamples.size >= 2) {
+                val minBpm = hrSamples.min().roundToInt()
+                val maxBpm = ride.maxHeartRateBpm ?: hrSamples.max().roundToInt()
+                val avgBpm = ride.avgHeartRateBpm ?: hrSamples.average().roundToInt()
+                RideTelemetryChartCard(
+                    title = "Recorded Heart Rate",
+                    icon = Icons.Filled.Favorite,
+                    values = hrSamples,
+                    leftLabel = FormatUtils.formatDistance(0.0, measurementUnit),
+                    centerLabel = "Min $minBpm bpm • Avg $avgBpm bpm • Peak $maxBpm bpm",
+                    rightLabel = FormatUtils.formatDistance(ride.distanceMiles, measurementUnit)
+                )
+            }
+
             // GPX Export & Share Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -317,9 +395,17 @@ fun RideDetailScreen(
                         text = "Export & Share GPX Track",
                         style = MaterialTheme.typography.titleMedium
                     )
+                    val extraFields = listOfNotNull(
+                        "cadence".takeIf { ride.avgCadenceRpm != null },
+                        "heart rate".takeIf { ride.avgHeartRateBpm != null }
+                    )
+                    val gpxDescSuffix = if (extraFields.isNotEmpty()) {
+                        ", and ${extraFields.joinToString(" & ")} data."
+                    } else {
+                        "."
+                    }
                     Text(
-                        text = "Export standard GPX 1.1 XML with GPS coordinates, elevation, timestamps" +
-                            if (ride.avgCadenceRpm != null) ", and cycling cadence data." else ".",
+                        text = "Export standard GPX 1.1 XML with GPS coordinates, elevation, timestamps$gpxDescSuffix",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

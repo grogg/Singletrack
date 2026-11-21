@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.bluetooth.BleCyclingSensorManager
 import com.example.data.bluetooth.CscSensorReading
+import com.example.data.bluetooth.HrSensorReading
 import com.example.data.health.HealthConnectSyncManager
 import com.example.data.local.SingletrackDatabase
 import com.example.data.location.DeviceLocationResult
@@ -41,6 +42,14 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.UUID
 
+enum class BlePermissionAction {
+    CONNECT_ALL,
+    SCAN_CSC,
+    SCAN_HR,
+    CONNECT_CSC,
+    CONNECT_HR
+}
+
 class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private val database = SingletrackDatabase.getInstance(application)
     private val trailRepository = TrailRepository(database.offlineTrailDao())
@@ -67,6 +76,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private var rideCadenceSum: Long = 0L
     private var rideCadenceCount: Int = 0
     private var usedBleSensorInRide: Boolean = false
+    private var rideHrSum: Long = 0L
+    private var rideHrCount: Int = 0
+    private var usedHrSensorInRide: Boolean = false
 
     init {
         observeLocalData()
@@ -75,8 +87,13 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         if (locationProvider.hasLocationPermission()) {
             locateAndScanCurrentPosition()
         }
-        if (bleSensorManager.sensorState.value.pairedSensor != null && bleSensorManager.hasRequiredPermissions()) {
-            bleSensorManager.connectPairedSensor()
+        if (bleSensorManager.hasRequiredPermissions()) {
+            if (bleSensorManager.sensorState.value.pairedSensor != null) {
+                bleSensorManager.connectPairedSensor()
+            }
+            if (bleSensorManager.sensorState.value.pairedHrSensor != null) {
+                bleSensorManager.connectPairedHrSensor()
+            }
         }
     }
 
@@ -120,6 +137,11 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 processBleSensorReading(reading)
             }
         }
+        viewModelScope.launch {
+            bleSensorManager.hrReadings.collect { reading ->
+                processBleHrReading(reading)
+            }
+        }
     }
 
     fun selectDestination(destination: AppDestination) {
@@ -134,17 +156,37 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         bleSensorManager.refreshCapabilities()
     }
 
-    fun onBluetoothPermissionsResult(granted: Boolean, scanAfterGrant: Boolean = false) {
+    fun onBluetoothPermissionsResult(
+        granted: Boolean,
+        action: BlePermissionAction = BlePermissionAction.CONNECT_ALL
+    ) {
         bleSensorManager.refreshCapabilities()
         if (granted) {
-            if (scanAfterGrant) {
-                bleSensorManager.startScan()
-            } else if (bleSensorManager.sensorState.value.pairedSensor != null) {
-                bleSensorManager.connectPairedSensor()
+            when (action) {
+                BlePermissionAction.SCAN_CSC -> bleSensorManager.startScan()
+                BlePermissionAction.SCAN_HR -> bleSensorManager.startHrScan()
+                BlePermissionAction.CONNECT_CSC -> {
+                    if (bleSensorManager.sensorState.value.pairedSensor != null) {
+                        bleSensorManager.connectPairedSensor()
+                    }
+                }
+                BlePermissionAction.CONNECT_HR -> {
+                    if (bleSensorManager.sensorState.value.pairedHrSensor != null) {
+                        bleSensorManager.connectPairedHrSensor()
+                    }
+                }
+                BlePermissionAction.CONNECT_ALL -> {
+                    if (bleSensorManager.sensorState.value.pairedSensor != null) {
+                        bleSensorManager.connectPairedSensor()
+                    }
+                    if (bleSensorManager.sensorState.value.pairedHrSensor != null) {
+                        bleSensorManager.connectPairedHrSensor()
+                    }
+                }
             }
         } else {
             _uiState.update {
-                it.copy(snackbarMessage = "Bluetooth permission is needed to scan or connect cycling sensors.")
+                it.copy(snackbarMessage = "Bluetooth permission is needed to scan or connect cycling and heart rate sensors.")
             }
         }
     }
@@ -172,6 +214,27 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setWheelCircumferenceMm(circumferenceMm: Int) {
         bleSensorManager.updateWheelCircumference(circumferenceMm)
+    }
+
+    fun startBleHrScan() {
+        bleSensorManager.startHrScan()
+    }
+
+    fun stopBleHrScan() {
+        bleSensorManager.stopHrScan()
+    }
+
+    fun pairBleHrSensor(sensor: DiscoveredBleSensor) {
+        bleSensorManager.pairAndConnectHr(sensor)
+    }
+
+    fun connectPairedBleHrSensor() {
+        bleSensorManager.connectPairedHrSensor()
+    }
+
+    fun forgetBleHrSensor() {
+        bleSensorManager.forgetPairedHrSensor()
+        _uiState.update { it.copy(snackbarMessage = "Bluetooth heart rate monitor unpaired") }
     }
 
     fun openRideDetail(ride: RecordedRide) {
@@ -666,9 +729,18 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideCadenceSum = 0L
         rideCadenceCount = 0
         usedBleSensorInRide = false
+        rideHrSum = 0L
+        rideHrCount = 0
+        usedHrSensorInRide = false
         val paired = bleSensorManager.sensorState.value.pairedSensor
-        if (paired != null && bleSensorManager.hasRequiredPermissions()) {
-            bleSensorManager.connectPairedSensor()
+        val pairedHr = bleSensorManager.sensorState.value.pairedHrSensor
+        if (bleSensorManager.hasRequiredPermissions()) {
+            if (paired != null) {
+                bleSensorManager.connectPairedSensor()
+            }
+            if (pairedHr != null) {
+                bleSensorManager.connectPairedHrSensor()
+            }
         }
         val now = System.currentTimeMillis()
         _uiState.update {
@@ -677,7 +749,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                     status = RideRecordingStatus.RECORDING,
                     targetTrailName = trailName,
                     startTimeMillis = now,
-                    sensorSourceLabel = paired?.name
+                    sensorSourceLabel = paired?.name,
+                    hrSensorSourceLabel = pairedHr?.name
                 )
             )
         }
@@ -692,7 +765,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 activeRide = state.activeRide.copy(
                     status = RideRecordingStatus.PAUSED,
                     currentSpeedMph = 0.0,
-                    currentCadenceRpm = null
+                    currentCadenceRpm = null,
+                    currentHeartRateBpm = null
                 )
             )
         }
@@ -715,6 +789,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideCadenceSum = 0L
         rideCadenceCount = 0
         usedBleSensorInRide = false
+        rideHrSum = 0L
+        rideHrCount = 0
+        usedHrSensorInRide = false
         _uiState.update {
             it.copy(
                 activeRide = ActiveRideMetrics(),
@@ -734,6 +811,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideCadenceCount = 0
         val recordedWithBleSensor = usedBleSensorInRide
         usedBleSensorInRide = false
+        rideHrSum = 0L
+        rideHrCount = 0
+        val recordedWithHrSensor = usedHrSensorInRide
+        usedHrSensorInRide = false
 
         val endTime = System.currentTimeMillis()
         val durationSec = current.elapsedSeconds.coerceAtLeast(1L)
@@ -765,7 +846,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             healthConnectSessionId = null,
             avgCadenceRpm = current.avgCadenceRpm,
             maxCadenceRpm = current.maxCadenceRpm,
-            sensorName = if (recordedWithBleSensor) current.sensorSourceLabel else null
+            sensorName = if (recordedWithBleSensor) current.sensorSourceLabel else null,
+            avgHeartRateBpm = current.avgHeartRateBpm,
+            maxHeartRateBpm = current.maxHeartRateBpm,
+            hrSensorName = if (recordedWithHrSensor) current.hrSensorSourceLabel else null
         )
 
         _uiState.update { it.copy(activeRide = ActiveRideMetrics()) }
@@ -773,7 +857,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             rideRepository.saveRide(ride)
             val state = _uiState.value
-            if (state.autoSyncToHealthConnect && state.healthConnectStatus.permissionsGranted) {
+            val willAutoHealthConnect = state.autoSyncToHealthConnect && state.healthConnectStatus.permissionsGranted
+
+            if (willAutoHealthConnect) {
                 syncRideToHealthConnect(ride)
             } else {
                 _uiState.update {
@@ -877,10 +963,20 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun processBleSensorReading(reading: CscSensorReading) {
+        if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) return
+        usedBleSensorInRide = true
+
+        val updatedAvgCadence: Int? = if (reading.crankDataPresent && reading.cadenceRpm != null && reading.cadenceRpm > 0) {
+            rideCadenceSum += reading.cadenceRpm
+            rideCadenceCount += 1
+            (rideCadenceSum / rideCadenceCount).toInt()
+        } else {
+            null
+        }
+
         _uiState.update { state ->
             val current = state.activeRide
             if (current.status != RideRecordingStatus.RECORDING) return@update state
-            usedBleSensorInRide = true
 
             var nextDistance = current.distanceMiles
             var nextSpeedMph = current.currentSpeedMph
@@ -901,9 +997,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             if (reading.crankDataPresent && reading.cadenceRpm != null) {
                 nextCadence = reading.cadenceRpm
                 if (reading.cadenceRpm > 0) {
-                    rideCadenceSum += reading.cadenceRpm
-                    rideCadenceCount += 1
-                    nextAvgCadence = (rideCadenceSum / rideCadenceCount).toInt()
+                    nextAvgCadence = updatedAvgCadence ?: nextAvgCadence
                     nextMaxCadence = maxOf(current.maxCadenceRpm ?: 0, reading.cadenceRpm)
                 }
             }
@@ -922,12 +1016,38 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun processBleHrReading(reading: HrSensorReading) {
+        if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) return
+        usedHrSensorInRide = true
+
+        rideHrSum += reading.heartRateBpm
+        rideHrCount += 1
+        val nextAvgHr = (rideHrSum / rideHrCount).toInt()
+
+        _uiState.update { state ->
+            val current = state.activeRide
+            if (current.status != RideRecordingStatus.RECORDING) return@update state
+
+            val nextMaxHr = maxOf(current.maxHeartRateBpm ?: 0, reading.heartRateBpm)
+
+            state.copy(
+                activeRide = current.copy(
+                    currentHeartRateBpm = reading.heartRateBpm,
+                    avgHeartRateBpm = nextAvgHr,
+                    maxHeartRateBpm = nextMaxHr,
+                    hrSensorSourceLabel = reading.sensorName
+                )
+            )
+        }
+    }
+
     private fun processNewRideLocation(location: Location) {
         if (location.hasAccuracy() && location.accuracy > 50f) return
 
         val now = System.currentTimeMillis()
         val usingWheelSensor = bleSensorManager.hasFreshWheelReading(now)
         val freshCadence = bleSensorManager.getLatestFreshCadence(now)
+        val freshHeartRate = bleSensorManager.getLatestFreshHeartRate(now)
         val freshWheelSpeedMps = if (usingWheelSensor) {
             bleSensorManager.sensorState.value.liveSpeedMph?.let { (it / 2.23694).toFloat() }
         } else {
@@ -985,7 +1105,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 altitudeMeters = if (location.hasAltitude()) location.altitude else null,
                 speedMps = sampleSpeedMps,
                 timestampMillis = now,
-                cadenceRpm = freshCadence
+                cadenceRpm = freshCadence,
+                heartRateBpm = freshHeartRate
             )
 
             state.copy(

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Singletrack</string>
+    <string name="app_name">Singletrack MTB</string>
     <string name="hero_subtitle">20-Mile Trail Radar</string>
     <string name="search_trails_hint">Search trails, parks, or surfaces…</string>
     <string name="tab_list">Trail List</string>

@@ -48,7 +48,10 @@ class RideRepository(
         healthConnectSessionId = healthConnectSessionId,
         avgCadenceRpm = avgCadenceRpm,
         maxCadenceRpm = maxCadenceRpm,
-        sensorName = sensorName
+        sensorName = sensorName,
+        avgHeartRateBpm = avgHeartRateBpm,
+        maxHeartRateBpm = maxHeartRateBpm,
+        hrSensorName = hrSensorName
     )
 
     private fun RecordedRide.toEntity(): RideEntity = RideEntity(
@@ -68,6 +71,9 @@ class RideRepository(
         healthConnectSessionId = healthConnectSessionId,
         avgCadenceRpm = avgCadenceRpm,
         maxCadenceRpm = maxCadenceRpm,
-        sensorName = sensorName
+        sensorName = sensorName,
+        avgHeartRateBpm = avgHeartRateBpm,
+        maxHeartRateBpm = maxHeartRateBpm,
+        hrSensorName = hrSensorName
     )
 }

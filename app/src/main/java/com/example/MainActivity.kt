@@ -68,6 +68,7 @@ import com.example.ui.screens.RideScreen
 import com.example.ui.screens.TrailDetailScreen
 import com.example.ui.theme.SingletrackTheme
 import com.example.ui.viewmodel.AppDestination
+import com.example.ui.viewmodel.BlePermissionAction
 import com.example.ui.viewmodel.TrailViewModel
 
 private enum class PickerPurpose {
@@ -97,7 +98,7 @@ fun SingletrackApp(
     val snackbarHostState = remember { SnackbarHostState() }
     var pickerPurpose by remember { mutableStateOf(PickerPurpose.NONE) }
     var showSettingsDialog by remember { mutableStateOf(false) }
-    var pendingBleScanAfterPermission by remember { mutableStateOf(false) }
+    var pendingBlePermissionAction by remember { mutableStateOf(BlePermissionAction.CONNECT_ALL) }
     var pendingGpxExportRide by remember { mutableStateOf<RecordedRide?>(null) }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -114,9 +115,9 @@ fun SingletrackApp(
         val granted = BleCyclingSensorManager.requiredPermissions().all { perm ->
             permissions[perm] == true
         }
-        val shouldScan = pendingBleScanAfterPermission
-        pendingBleScanAfterPermission = false
-        viewModel.onBluetoothPermissionsResult(granted, scanAfterGrant = shouldScan)
+        val action = pendingBlePermissionAction
+        pendingBlePermissionAction = BlePermissionAction.CONNECT_ALL
+        viewModel.onBluetoothPermissionsResult(granted, action = action)
     }
 
     val saveGpxLauncher = rememberLauncherForActivityResult(
@@ -182,7 +183,7 @@ fun SingletrackApp(
         if (viewModel.bleSensorManager.hasRequiredPermissions()) {
             viewModel.startBleSensorScan()
         } else {
-            pendingBleScanAfterPermission = true
+            pendingBlePermissionAction = BlePermissionAction.SCAN_CSC
             bluetoothPermissionLauncher.launch(BleCyclingSensorManager.requiredPermissions())
         }
     }
@@ -191,7 +192,25 @@ fun SingletrackApp(
         if (viewModel.bleSensorManager.hasRequiredPermissions()) {
             viewModel.connectPairedBleSensor()
         } else {
-            pendingBleScanAfterPermission = false
+            pendingBlePermissionAction = BlePermissionAction.CONNECT_CSC
+            bluetoothPermissionLauncher.launch(BleCyclingSensorManager.requiredPermissions())
+        }
+    }
+
+    val requestBleHrScan: () -> Unit = {
+        if (viewModel.bleSensorManager.hasRequiredPermissions()) {
+            viewModel.startBleHrScan()
+        } else {
+            pendingBlePermissionAction = BlePermissionAction.SCAN_HR
+            bluetoothPermissionLauncher.launch(BleCyclingSensorManager.requiredPermissions())
+        }
+    }
+
+    val connectPairedBleHr: () -> Unit = {
+        if (viewModel.bleSensorManager.hasRequiredPermissions()) {
+            viewModel.connectPairedBleHrSensor()
+        } else {
+            pendingBlePermissionAction = BlePermissionAction.CONNECT_HR
             bluetoothPermissionLauncher.launch(BleCyclingSensorManager.requiredPermissions())
         }
     }
@@ -597,8 +616,14 @@ fun SingletrackApp(
             onConnectPairedBle = connectPairedBle,
             onForgetBleSensor = viewModel::forgetBleSensor,
             onSelectWheelCircumference = viewModel::setWheelCircumferenceMm,
+            onRequestBleHrScan = requestBleHrScan,
+            onStopBleHrScan = viewModel::stopBleHrScan,
+            onPairBleHrSensor = viewModel::pairBleHrSensor,
+            onConnectPairedBleHr = connectPairedBleHr,
+            onForgetBleHrSensor = viewModel::forgetBleHrSensor,
             onDismiss = {
                 viewModel.stopBleSensorScan()
+                viewModel.stopBleHrScan()
                 showSettingsDialog = false
             }
         )

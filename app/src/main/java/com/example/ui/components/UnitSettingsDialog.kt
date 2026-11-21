@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.BluetoothSearching
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +58,11 @@ fun UnitSettingsDialog(
     onConnectPairedBle: () -> Unit = {},
     onForgetBleSensor: () -> Unit = {},
     onSelectWheelCircumference: (Int) -> Unit = {},
+    onRequestBleHrScan: () -> Unit = {},
+    onStopBleHrScan: () -> Unit = {},
+    onPairBleHrSensor: (DiscoveredBleSensor) -> Unit = {},
+    onConnectPairedBleHr: () -> Unit = {},
+    onForgetBleHrSensor: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -403,6 +409,217 @@ fun UnitSettingsDialog(
                                             Button(
                                                 onClick = { onPairBleSensor(sensor) },
                                                 modifier = Modifier.testTag("ble_pair_${sensor.address}")
+                                            ) {
+                                                Text("Pair")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    // Section 3: Bluetooth Heart Rate Monitor (0x180D)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Favorite,
+                                contentDescription = null,
+                                tint = if (bleSensorState.hrConnectionStatus == BleConnectionStatus.CONNECTED) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                },
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Bluetooth Heart Rate Monitor",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+
+                        Text(
+                            text = "Pair a Bluetooth LE heart rate chest strap or armband (0x180D) to record live BPM, average/max heart rate, and per-sample GPX & Health Connect telemetry.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        bleSensorState.pairedHrSensor?.let { pairedHr ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("ble_paired_hr_card")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = pairedHr.name,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = pairedHr.address,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        val hrStatusLabel = when (bleSensorState.hrConnectionStatus) {
+                                            BleConnectionStatus.CONNECTED -> "Connected"
+                                            BleConnectionStatus.CONNECTING -> "Connecting…"
+                                            BleConnectionStatus.DISCONNECTED -> "Disconnected"
+                                            BleConnectionStatus.ERROR -> "Error"
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(50),
+                                            color = if (bleSensorState.hrConnectionStatus == BleConnectionStatus.CONNECTED) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                            } else {
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                            }
+                                        ) {
+                                            Text(
+                                                text = hrStatusLabel,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (bleSensorState.hrConnectionStatus == BleConnectionStatus.CONNECTED) {
+                                                    MaterialTheme.colorScheme.primary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+
+                                    if (bleSensorState.hrConnectionStatus == BleConnectionStatus.CONNECTED) {
+                                        val hrPreview = bleSensorState.liveHeartRateBpm?.let { "$it bpm" } ?: "-- bpm"
+                                        Text(
+                                            text = "Live Heart Rate: $hrPreview",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (bleSensorState.hrConnectionStatus != BleConnectionStatus.CONNECTED &&
+                                            bleSensorState.hrConnectionStatus != BleConnectionStatus.CONNECTING
+                                        ) {
+                                            Button(
+                                                onClick = onConnectPairedBleHr,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("ble_hr_connect_button")
+                                            ) {
+                                                Text("Connect")
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = onForgetBleHrSensor,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("ble_hr_forget_button")
+                                        ) {
+                                            Text("Forget")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (bleSensorState.isBluetoothSupported) {
+                            if (bleSensorState.isScanningHr) {
+                                OutlinedButton(
+                                    onClick = onStopBleHrScan,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("ble_hr_scan_button")
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Stop Scanning")
+                                }
+                            } else {
+                                Button(
+                                    onClick = onRequestBleHrScan,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("ble_hr_scan_button")
+                                ) {
+                                    Icon(Icons.Filled.Favorite, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        if (bleSensorState.pairedHrSensor != null) {
+                                            "Scan for Different HR Monitor"
+                                        } else {
+                                            "Scan for Heart Rate Sensors"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        bleSensorState.hrStatusMessage?.takeIf { it.isNotBlank() }?.let { msg ->
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (bleSensorState.discoveredHrSensors.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Discovered HR Sensors (${bleSensorState.discoveredHrSensors.size})",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                bleSensorState.discoveredHrSensors.forEach { sensor ->
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = sensor.name,
+                                                    style = MaterialTheme.typography.titleSmall
+                                                )
+                                                Text(
+                                                    text = "${sensor.address} • ${sensor.rssi} dBm",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Button(
+                                                onClick = { onPairBleHrSensor(sensor) },
+                                                modifier = Modifier.testTag("ble_hr_pair_${sensor.address}")
                                             ) {
                                                 Text("Pair")
                                             }

@@ -60,12 +60,12 @@ class PermissionsRationaleActivity : ComponentActivity() {
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(
-                                    text = "Singletrack requests permission to write your recorded mountain biking sessions, GPS routes, distance, and speed to Health Connect.",
+                                    text = "Singletrack MTB requests permission to write your recorded mountain biking sessions, GPS routes, distance, speed, and heart rate to Health Connect.",
                                     style = MaterialTheme.typography.bodyLarge
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "This allows Google Fit and other connected fitness apps on your device to display your rides automatically. Singletrack never sells or shares your health data externally.",
+                                    text = "This allows Google Fit and other connected fitness apps on your device to display your rides automatically. Singletrack MTB never sells or shares your health data externally.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

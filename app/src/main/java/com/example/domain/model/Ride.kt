@@ -6,7 +6,8 @@ data class RideSample(
     val altitudeMeters: Double? = null,
     val speedMps: Float? = null,
     val timestampMillis: Long,
-    val cadenceRpm: Int? = null
+    val cadenceRpm: Int? = null,
+    val heartRateBpm: Int? = null
 )
 
 data class RecordedRide(
@@ -26,7 +27,10 @@ data class RecordedRide(
     val healthConnectSessionId: String? = null,
     val avgCadenceRpm: Int? = null,
     val maxCadenceRpm: Int? = null,
-    val sensorName: String? = null
+    val sensorName: String? = null,
+    val avgHeartRateBpm: Int? = null,
+    val maxHeartRateBpm: Int? = null,
+    val hrSensorName: String? = null
 )
 
 enum class RideRecordingStatus {
@@ -49,7 +53,11 @@ data class ActiveRideMetrics(
     val currentCadenceRpm: Int? = null,
     val avgCadenceRpm: Int? = null,
     val maxCadenceRpm: Int? = null,
-    val sensorSourceLabel: String? = null
+    val sensorSourceLabel: String? = null,
+    val currentHeartRateBpm: Int? = null,
+    val avgHeartRateBpm: Int? = null,
+    val maxHeartRateBpm: Int? = null,
+    val hrSensorSourceLabel: String? = null
 )
 
 enum class WheelCircumferencePreset(
@@ -75,6 +83,11 @@ data class PairedBleSensor(
     val wheelCircumferenceMm: Int = WheelCircumferencePreset.MTB_29.circumferenceMm
 )
 
+data class PairedHrSensor(
+    val name: String,
+    val address: String
+)
+
 enum class BleConnectionStatus {
     DISCONNECTED,
     CONNECTING,
@@ -94,5 +107,11 @@ data class BleSensorUiState(
     val liveCadenceRpm: Int? = null,
     val hasWheelCapability: Boolean = false,
     val hasCadenceCapability: Boolean = false,
-    val statusMessage: String? = null
+    val statusMessage: String? = null,
+    val pairedHrSensor: PairedHrSensor? = null,
+    val hrConnectionStatus: BleConnectionStatus = BleConnectionStatus.DISCONNECTED,
+    val isScanningHr: Boolean = false,
+    val discoveredHrSensors: List<DiscoveredBleSensor> = emptyList(),
+    val liveHeartRateBpm: Int? = null,
+    val hrStatusMessage: String? = null
 )

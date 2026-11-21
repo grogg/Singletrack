@@ -3,6 +3,8 @@ package com.example.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -61,6 +63,7 @@ import com.example.domain.model.RideRecordingStatus
 import com.example.ui.components.FormatUtils
 import com.example.ui.components.TrailShapeCanvas
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RideScreen(
     activeRide: ActiveRideMetrics,
@@ -293,10 +296,14 @@ fun RideScreen(
                         )
                     }
 
-                    // Bluetooth Cycling Sensor Banner
+                    // Bluetooth Cycling & Heart Rate Sensors Banner
+                    val cscConnected = bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED
+                    val hrConnected = bleSensorState.hrConnectionStatus == BleConnectionStatus.CONNECTED
+                    val anyConnected = cscConnected || hrConnected
+                    val anyPaired = bleSensorState.pairedSensor != null || bleSensorState.pairedHrSensor != null
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                        color = if (anyConnected) {
                             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
@@ -316,30 +323,43 @@ fun RideScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                    imageVector = if (anyConnected) {
                                         Icons.Filled.BluetoothConnected
                                     } else {
                                         Icons.Filled.Bluetooth
                                     },
                                     contentDescription = null,
                                     modifier = Modifier.size(18.dp),
-                                    tint = if (bleSensorState.connectionStatus == BleConnectionStatus.CONNECTED) {
+                                    tint = if (anyConnected) {
                                         MaterialTheme.colorScheme.primary
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                     }
                                 )
-                                val sensorLabel = when {
-                                    bleSensorState.pairedSensor != null -> {
+                                val sensorParts = buildList {
+                                    bleSensorState.pairedSensor?.let { csc ->
                                         val suffix = when (bleSensorState.connectionStatus) {
                                             BleConnectionStatus.CONNECTED -> "Connected"
                                             BleConnectionStatus.CONNECTING -> "Connecting…"
                                             BleConnectionStatus.DISCONNECTED -> "Disconnected"
-                                            BleConnectionStatus.ERROR -> "Retry needed"
+                                            BleConnectionStatus.ERROR -> "Retry"
                                         }
-                                        "${bleSensorState.pairedSensor.name} ($suffix)"
+                                        add("${csc.name} ($suffix)")
                                     }
-                                    else -> "No BT speed/cadence sensor paired"
+                                    bleSensorState.pairedHrSensor?.let { hr ->
+                                        val suffix = when (bleSensorState.hrConnectionStatus) {
+                                            BleConnectionStatus.CONNECTED -> "Connected"
+                                            BleConnectionStatus.CONNECTING -> "Connecting…"
+                                            BleConnectionStatus.DISCONNECTED -> "Disconnected"
+                                            BleConnectionStatus.ERROR -> "Retry"
+                                        }
+                                        add("HR: ${hr.name} ($suffix)")
+                                    }
+                                }
+                                val sensorLabel = if (sensorParts.isEmpty()) {
+                                    "No BT speed/cadence or HR sensor paired"
+                                } else {
+                                    sensorParts.joinToString(" • ")
                                 }
                                 Text(
                                     text = sensorLabel,
@@ -351,7 +371,7 @@ fun RideScreen(
                                 onClick = onOpenSettings,
                                 modifier = Modifier.testTag("ride_sensor_settings_button")
                             ) {
-                                Text(if (bleSensorState.pairedSensor != null) "Manage" else "Pair Sensor")
+                                Text(if (anyPaired) "Manage" else "Pair Sensors")
                             }
                         }
                     }
@@ -376,10 +396,11 @@ fun RideScreen(
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
 
-                    // Live telemetry row
-                    Row(
+                    // Live telemetry grid
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         RideMetricCell(
                             label = "Distance",
@@ -418,6 +439,17 @@ fun RideScreen(
                             RideMetricCell(
                                 label = "Cadence",
                                 value = cadenceVal?.let { "$it rpm" } ?: "--"
+                            )
+                        }
+                        if (activeRide.currentHeartRateBpm != null ||
+                            bleSensorState.pairedHrSensor != null ||
+                            bleSensorState.liveHeartRateBpm != null
+                        ) {
+                            val hrVal = activeRide.currentHeartRateBpm
+                                ?: bleSensorState.liveHeartRateBpm
+                            RideMetricCell(
+                                label = "Heart Rate",
+                                value = hrVal?.let { "$it bpm" } ?: "--"
                             )
                         }
                     }
@@ -569,6 +601,7 @@ private fun RideMetricCell(label: String, value: String) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecordedRideCard(
     ride: RecordedRide,
@@ -624,22 +657,49 @@ private fun RecordedRideCard(
                 }
             }
 
-            ride.sensorName?.takeIf { it.isNotBlank() }?.let { sensor ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            val hasCscSensor = !ride.sensorName.isNullOrBlank()
+            val hasHrSensor = !ride.hrSensorName.isNullOrBlank()
+            if (hasCscSensor || hasHrSensor) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Bluetooth,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.secondary
-                    )
-                    Text(
-                        text = "Sensor: $sensor",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
+                    ride.sensorName?.takeIf { it.isNotBlank() }?.let { sensor ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Bluetooth,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.secondary
+                            )
+                            Text(
+                                text = "Sensor: $sensor",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
+                    ride.hrSensorName?.takeIf { it.isNotBlank() }?.let { hrSensor ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Favorite,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "HR: $hrSensor",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
 
@@ -652,9 +712,10 @@ private fun RecordedRideCard(
                 )
             }
 
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 RideMetricCell("Duration", FormatUtils.formatDuration(ride.durationSeconds))
                 RideMetricCell(
@@ -671,6 +732,9 @@ private fun RecordedRideCard(
                 )
                 if (ride.avgCadenceRpm != null) {
                     RideMetricCell("Cadence", "${ride.avgCadenceRpm} rpm")
+                }
+                if (ride.avgHeartRateBpm != null) {
+                    RideMetricCell("Avg HR", "${ride.avgHeartRateBpm} bpm")
                 }
             }
 
@@ -736,6 +800,7 @@ private fun RecordedRideCard(
                     )
                 }
             }
+
         }
     }
 }

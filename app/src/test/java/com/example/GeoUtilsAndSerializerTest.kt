@@ -2,6 +2,7 @@ package com.example
 
 import com.example.data.bluetooth.CscMeasurementParser
 import com.example.data.bluetooth.CscParserState
+import com.example.data.bluetooth.HrMeasurementParser
 import com.example.data.export.GpxExporter
 import com.example.data.local.GeometrySerializer
 import com.example.data.repository.GeoUtils
@@ -99,22 +100,31 @@ class GeoUtilsAndSerializerTest {
         assertEquals(38.59500, decodedSegments[1][1].lat, 0.0001)
 
         val samples = listOf(
-            RideSample(38.57331, -109.54981, 1225.4, 5.42f, 1700000000000L, cadenceRpm = 84),
-            RideSample(38.58120, -109.54110, null, null, 1700000010000L, cadenceRpm = null)
+            RideSample(38.57331, -109.54981, 1225.4, 5.42f, 1700000000000L, cadenceRpm = 84, heartRateBpm = 148),
+            RideSample(38.58120, -109.54110, null, null, 1700000010000L, cadenceRpm = null, heartRateBpm = 152)
         )
         val decodedSamples = GeometrySerializer.decodeSamples(GeometrySerializer.encodeSamples(samples))
         assertEquals(2, decodedSamples.size)
         assertEquals(1225.4, decodedSamples[0].altitudeMeters ?: 0.0, 0.1)
         assertEquals(5.42f, decodedSamples[0].speedMps ?: 0f, 0.01f)
         assertEquals(84, decodedSamples[0].cadenceRpm)
+        assertEquals(148, decodedSamples[0].heartRateBpm)
         assertNull(decodedSamples[1].cadenceRpm)
+        assertEquals(152, decodedSamples[1].heartRateBpm)
 
-        // Legacy 5-column samples remain compatible
+        // Legacy 5-column and 6-column samples remain compatible
         val legacyRaw = "38.57331,-109.54981,1225.4,5.42,1700000000000"
         val legacyDecoded = GeometrySerializer.decodeSamples(legacyRaw)
         assertEquals(1, legacyDecoded.size)
         assertEquals(1225.4, legacyDecoded[0].altitudeMeters ?: 0.0, 0.1)
         assertNull(legacyDecoded[0].cadenceRpm)
+        assertNull(legacyDecoded[0].heartRateBpm)
+
+        val legacy6Raw = "38.57331,-109.54981,1225.4,5.42,1700000000000,90"
+        val legacy6Decoded = GeometrySerializer.decodeSamples(legacy6Raw)
+        assertEquals(1, legacy6Decoded.size)
+        assertEquals(90, legacy6Decoded[0].cadenceRpm)
+        assertNull(legacy6Decoded[0].heartRateBpm)
     }
 
     @Test
@@ -164,7 +174,31 @@ class GeoUtilsAndSerializerTest {
     }
 
     @Test
-    fun gpxExporter_buildsValidGpx11WithCadenceAndFallbackRoutePoints() {
+    fun hrMeasurementParser_parsesUint8Uint16ContactAndFiltersInvalid() {
+        // Flags = 0x06 -> UINT8 format, sensor contact supported & detected; BPM = 154
+        val uint8Packet = byteArrayOf(0x06, 154.toByte())
+        val parsed8 = HrMeasurementParser.parse(uint8Packet)
+        assertNotNull(parsed8)
+        assertEquals(154, parsed8!!.heartRateBpm)
+        assertTrue(parsed8.contactSupported)
+        assertTrue(parsed8.contactDetected)
+
+        // Flags = 0x05 -> UINT16 LE format, sensor contact supported & not detected; BPM = 182 (0x00B6 -> 0xB6, 0x00)
+        val uint16Packet = byteArrayOf(0x05, 0xB6.toByte(), 0x00)
+        val parsed16 = HrMeasurementParser.parse(uint16Packet)
+        assertNotNull(parsed16)
+        assertEquals(182, parsed16!!.heartRateBpm)
+        assertTrue(parsed16.contactSupported)
+        assertFalse(parsed16.contactDetected)
+
+        // Invalid / out-of-range packets
+        assertNull(HrMeasurementParser.parse(byteArrayOf()))
+        assertNull(HrMeasurementParser.parse(byteArrayOf(0x00, 0x00)))
+        assertNull(HrMeasurementParser.parse(byteArrayOf(0x01, 0x90.toByte())))
+    }
+
+    @Test
+    fun gpxExporter_buildsValidGpx11WithCadenceAndHeartRateAndFallbackRoutePoints() {
         val rideWithSamples = RecordedRide(
             id = "ride-1",
             title = "Whole Enchilada & Loop",
@@ -178,12 +212,15 @@ class GeoUtilsAndSerializerTest {
             elevationGainFeet = 320.0,
             routePoints = listOf(GeoPoint(38.5733, -109.5498), GeoPoint(38.5800, -109.5400)),
             samples = listOf(
-                RideSample(38.5733, -109.5498, 1250.5, 5.2f, 1700000000000L, cadenceRpm = 88),
-                RideSample(38.5800, -109.5400, 1275.0, 6.1f, 1700000060000L, cadenceRpm = null)
+                RideSample(38.5733, -109.5498, 1250.5, 5.2f, 1700000000000L, cadenceRpm = 88, heartRateBpm = 146),
+                RideSample(38.5800, -109.5400, 1275.0, 6.1f, 1700000060000L, cadenceRpm = null, heartRateBpm = 158)
             ),
             avgCadenceRpm = 88,
             maxCadenceRpm = 94,
-            sensorName = "Garmin CSC 2"
+            sensorName = "Garmin CSC 2",
+            avgHeartRateBpm = 152,
+            maxHeartRateBpm = 162,
+            hrSensorName = "Polar H10"
         )
 
         val xml = GpxExporter.buildGpxXml(rideWithSamples)
@@ -191,14 +228,19 @@ class GeoUtilsAndSerializerTest {
         assertTrue(xml.contains("<name>Whole Enchilada &amp; Loop</name>"))
         assertTrue(xml.contains("<trkpt lat=\"38.573300\" lon=\"-109.549800\">"))
         assertTrue(xml.contains("<ele>1250.5</ele>"))
+        assertTrue(xml.contains("<gpxtpx:hr>146</gpxtpx:hr>"))
         assertTrue(xml.contains("<gpxtpx:cad>88</gpxtpx:cad>"))
+        assertTrue(xml.contains("<gpxtpx:hr>158</gpxtpx:hr>"))
+        assertTrue(xml.contains("Avg HR: 152 bpm"))
         assertTrue(xml.contains("Garmin CSC 2"))
+        assertTrue(xml.contains("Polar H10"))
 
         // Fallback when samples list is empty uses routePoints
-        val fallbackRide = rideWithSamples.copy(samples = emptyList(), avgCadenceRpm = null)
+        val fallbackRide = rideWithSamples.copy(samples = emptyList(), avgCadenceRpm = null, avgHeartRateBpm = null)
         val fallbackXml = GpxExporter.buildGpxXml(fallbackRide)
         assertTrue(fallbackXml.contains("<trkpt lat=\"38.580000\" lon=\"-109.540000\">"))
         assertFalse(fallbackXml.contains("<gpxtpx:cad>"))
+        assertFalse(fallbackXml.contains("<gpxtpx:hr>"))
     }
 
     @Test

@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Singletrack"
+rootProject.name = "Singletrack MTB"
 
 include(":app")

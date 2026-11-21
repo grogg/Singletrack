@@ -25,6 +25,7 @@ import com.example.domain.model.BleConnectionStatus
 import com.example.domain.model.BleSensorUiState
 import com.example.domain.model.DiscoveredBleSensor
 import com.example.domain.model.PairedBleSensor
+import com.example.domain.model.PairedHrSensor
 import com.example.domain.model.WheelCircumferencePreset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +54,12 @@ data class CscSensorReading(
     val timestampMillis: Long
 )
 
+data class HrSensorReading(
+    val sensorName: String,
+    val heartRateBpm: Int,
+    val timestampMillis: Long
+)
+
 class BleCyclingSensorManager(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -68,10 +75,17 @@ class BleCyclingSensorManager(private val context: Context) {
     private val _readings = MutableSharedFlow<CscSensorReading>(extraBufferCapacity = 32)
     val readings: SharedFlow<CscSensorReading> = _readings.asSharedFlow()
 
+    private val _hrReadings = MutableSharedFlow<HrSensorReading>(extraBufferCapacity = 32)
+    val hrReadings: SharedFlow<HrSensorReading> = _hrReadings.asSharedFlow()
+
     private var activeGatt: BluetoothGatt? = null
+    private var activeHrGatt: BluetoothGatt? = null
     private var activeScanner: BluetoothLeScanner? = null
+    private var activeHrScanner: BluetoothLeScanner? = null
     private var scanTimeoutJob: Job? = null
+    private var hrScanTimeoutJob: Job? = null
     private var staleWatchdogJob: Job? = null
+    private var staleHrWatchdogJob: Job? = null
     private val parserLock = Any()
     private var parserState = CscParserState()
 
@@ -80,6 +94,9 @@ class BleCyclingSensorManager(private val context: Context) {
 
     @Volatile
     private var lastCrankPacketAtMillis: Long = 0L
+
+    @Volatile
+    private var lastHrPacketAtMillis: Long = 0L
 
     private fun buildInitialState(): BleSensorUiState {
         val supported = context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE) &&
@@ -96,11 +113,22 @@ class BleCyclingSensorManager(private val context: Context) {
         } else {
             null
         }
+        val savedHrAddress = prefs.getString(KEY_HR_SENSOR_ADDRESS, null)
+        val savedHrName = prefs.getString(KEY_HR_SENSOR_NAME, null)
+        val pairedHr = if (!savedHrAddress.isNullOrBlank()) {
+            PairedHrSensor(
+                name = savedHrName?.takeIf { it.isNotBlank() } ?: "Heart Rate Monitor",
+                address = savedHrAddress
+            )
+        } else {
+            null
+        }
         return BleSensorUiState(
             isBluetoothSupported = supported,
             isBluetoothEnabled = bluetoothAdapter?.isEnabled == true,
             hasBluetoothPermissions = hasRequiredPermissions(),
-            pairedSensor = paired
+            pairedSensor = paired,
+            pairedHrSensor = pairedHr
         )
     }
 
@@ -147,11 +175,13 @@ class BleCyclingSensorManager(private val context: Context) {
         }
 
         stopScanInternal()
+        stopHrScanInternal()
 
         activeScanner = scanner
         _sensorState.update {
             it.copy(
                 isScanning = true,
+                isScanningHr = false,
                 discoveredSensors = emptyList(),
                 statusMessage = "Scanning for Bluetooth Speed & Cadence (CSC) sensors…"
             )
@@ -187,7 +217,9 @@ class BleCyclingSensorManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun stopScan() {
+        val wasScanning = _sensorState.value.isScanning
         stopScanInternal()
+        if (!wasScanning) return
         _sensorState.update { current ->
             val msg = if (current.discoveredSensors.isEmpty() && current.connectionStatus == BleConnectionStatus.DISCONNECTED) {
                 "No CSC speed or cadence sensors found. Wake your sensor by spinning the wheel or crank."
@@ -202,11 +234,11 @@ class BleCyclingSensorManager(private val context: Context) {
     private fun stopScanInternal() {
         scanTimeoutJob?.cancel()
         scanTimeoutJob = null
-        val scanner = activeScanner ?: bluetoothAdapter?.bluetoothLeScanner
+        val scanner = activeScanner
+        activeScanner = null
         if (scanner != null && hasScanPermission()) {
             runCatching { scanner.stopScan(scanCallback) }
         }
-        activeScanner = null
     }
 
     fun pairAndConnect(sensor: DiscoveredBleSensor) {
@@ -325,6 +357,8 @@ class BleCyclingSensorManager(private val context: Context) {
         stopScanInternal()
         staleWatchdogJob?.cancel()
         staleWatchdogJob = null
+        lastWheelPacketAtMillis = 0L
+        lastCrankPacketAtMillis = 0L
         disconnectGattOnly()
         synchronized(parserLock) {
             parserState = CscParserState()
@@ -356,8 +390,243 @@ class BleCyclingSensorManager(private val context: Context) {
         return _sensorState.value.liveCadenceRpm
     }
 
+    fun getLatestFreshHeartRate(nowMillis: Long = System.currentTimeMillis()): Int? {
+        if (_sensorState.value.hrConnectionStatus != BleConnectionStatus.CONNECTED) return null
+        if ((nowMillis - lastHrPacketAtMillis) > READING_FRESH_WINDOW_MS) return null
+        return _sensorState.value.liveHeartRateBpm
+    }
+
+    @SuppressLint("MissingPermission")
+    fun startHrScan() {
+        refreshCapabilities()
+        val state = _sensorState.value
+        if (!state.isBluetoothSupported) {
+            _sensorState.update { it.copy(hrStatusMessage = "Bluetooth Low Energy is not supported on this device.") }
+            return
+        }
+        if (!hasRequiredPermissions()) {
+            _sensorState.update { it.copy(hrStatusMessage = "Bluetooth permission is required to scan for HR monitors.") }
+            return
+        }
+        val adapter = bluetoothAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            _sensorState.update { it.copy(hrStatusMessage = "Turn on Bluetooth in system settings to scan for HR monitors.") }
+            return
+        }
+        val scanner = adapter.bluetoothLeScanner ?: run {
+            _sensorState.update { it.copy(hrStatusMessage = "BLE scanner unavailable.") }
+            return
+        }
+
+        stopScanInternal()
+        stopHrScanInternal()
+
+        activeHrScanner = scanner
+        _sensorState.update {
+            it.copy(
+                isScanning = false,
+                isScanningHr = true,
+                discoveredHrSensors = emptyList(),
+                hrStatusMessage = "Scanning for Bluetooth Heart Rate (HR) monitors…"
+            )
+        }
+
+        val filters = listOf(
+            ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(HR_SERVICE_UUID))
+                .build()
+        )
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        try {
+            scanner.startScan(filters, settings, hrScanCallback)
+        } catch (_: SecurityException) {
+            _sensorState.update {
+                it.copy(
+                    isScanningHr = false,
+                    hrStatusMessage = "Missing Bluetooth scan permission."
+                )
+            }
+            return
+        }
+
+        hrScanTimeoutJob?.cancel()
+        hrScanTimeoutJob = scope.launch {
+            delay(SCAN_TIMEOUT_MS)
+            stopHrScan()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun stopHrScan() {
+        val wasScanning = _sensorState.value.isScanningHr
+        stopHrScanInternal()
+        if (!wasScanning) return
+        _sensorState.update { current ->
+            val msg = if (current.discoveredHrSensors.isEmpty() && current.hrConnectionStatus == BleConnectionStatus.DISCONNECTED) {
+                "No Heart Rate monitors found. Ensure your chest strap or armband is worn and awake."
+            } else {
+                null
+            }
+            current.copy(isScanningHr = false, hrStatusMessage = msg ?: current.hrStatusMessage)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopHrScanInternal() {
+        hrScanTimeoutJob?.cancel()
+        hrScanTimeoutJob = null
+        val scanner = activeHrScanner
+        activeHrScanner = null
+        if (scanner != null && hasScanPermission()) {
+            runCatching { scanner.stopScan(hrScanCallback) }
+        }
+    }
+
+    fun pairAndConnectHr(sensor: DiscoveredBleSensor) {
+        stopHrScanInternal()
+        val config = PairedHrSensor(
+            name = sensor.name,
+            address = sensor.address
+        )
+        prefs.edit {
+            putString(KEY_HR_SENSOR_ADDRESS, config.address)
+            putString(KEY_HR_SENSOR_NAME, config.name)
+        }
+        _sensorState.update {
+            it.copy(
+                isScanningHr = false,
+                pairedHrSensor = config,
+                hrStatusMessage = "Paired ${config.name}"
+            )
+        }
+        connectPairedHrSensor()
+    }
+
+    @SuppressLint("MissingPermission")
+    fun connectPairedHrSensor() {
+        refreshCapabilities()
+        val paired = _sensorState.value.pairedHrSensor ?: return
+        val adapter = bluetoothAdapter ?: return
+        if (!adapter.isEnabled || !hasConnectPermission()) {
+            _sensorState.update {
+                it.copy(
+                    hrConnectionStatus = BleConnectionStatus.DISCONNECTED,
+                    hrStatusMessage = if (!adapter.isEnabled) {
+                        "Enable Bluetooth to connect ${paired.name}"
+                    } else {
+                        "Grant Bluetooth permission to connect ${paired.name}"
+                    }
+                )
+            }
+            return
+        }
+
+        if (_sensorState.value.hrConnectionStatus == BleConnectionStatus.CONNECTED && activeHrGatt != null) {
+            return
+        }
+
+        disconnectHrGattOnly()
+
+        val device = runCatching { adapter.getRemoteDevice(paired.address) }.getOrNull()
+        if (device == null) {
+            _sensorState.update {
+                it.copy(
+                    hrConnectionStatus = BleConnectionStatus.ERROR,
+                    hrStatusMessage = "Saved HR sensor address is invalid."
+                )
+            }
+            return
+        }
+
+        _sensorState.update {
+            it.copy(
+                hrConnectionStatus = BleConnectionStatus.CONNECTING,
+                hrStatusMessage = "Connecting to ${paired.name}…"
+            )
+        }
+
+        try {
+            activeHrGatt = device.connectGatt(context, false, hrGattCallback, BluetoothDevice.TRANSPORT_LE)
+            startHrStaleWatchdog()
+        } catch (_: SecurityException) {
+            _sensorState.update {
+                it.copy(
+                    hrConnectionStatus = BleConnectionStatus.ERROR,
+                    hrStatusMessage = "Bluetooth Connect permission required."
+                )
+            }
+        }
+    }
+
+    fun forgetPairedHrSensor() {
+        disconnectHr()
+        prefs.edit {
+            remove(KEY_HR_SENSOR_ADDRESS)
+            remove(KEY_HR_SENSOR_NAME)
+        }
+        _sensorState.update {
+            it.copy(
+                pairedHrSensor = null,
+                hrConnectionStatus = BleConnectionStatus.DISCONNECTED,
+                liveHeartRateBpm = null,
+                hrStatusMessage = null
+            )
+        }
+    }
+
+    fun disconnectHr() {
+        stopHrScanInternal()
+        staleHrWatchdogJob?.cancel()
+        staleHrWatchdogJob = null
+        lastHrPacketAtMillis = 0L
+        disconnectHrGattOnly()
+        _sensorState.update {
+            it.copy(
+                isScanningHr = false,
+                hrConnectionStatus = BleConnectionStatus.DISCONNECTED,
+                liveHeartRateBpm = null
+            )
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun disconnectHrGattOnly() {
+        val gatt = activeHrGatt
+        activeHrGatt = null
+        if (gatt != null && hasConnectPermission()) {
+            runCatching {
+                gatt.disconnect()
+                gatt.close()
+            }
+        }
+    }
+
+    private fun startHrStaleWatchdog() {
+        staleHrWatchdogJob?.cancel()
+        staleHrWatchdogJob = scope.launch {
+            while (isActive) {
+                delay(1500L)
+                val now = System.currentTimeMillis()
+                val clearHr = lastHrPacketAtMillis > 0L && (now - lastHrPacketAtMillis) > READING_FRESH_WINDOW_MS
+                if (clearHr) {
+                    _sensorState.update { state ->
+                        if (state.liveHeartRateBpm != null) {
+                            state.copy(liveHeartRateBpm = null)
+                        } else {
+                            state
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fun release() {
         disconnect()
+        disconnectHr()
         scope.cancel()
     }
 
@@ -450,6 +719,12 @@ class BleCyclingSensorManager(private val context: Context) {
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (activeGatt != null && activeGatt !== gatt) {
+                if (hasConnectPermission()) {
+                    runCatching { gatt.close() }
+                }
+                return
+            }
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 if (hasConnectPermission()) {
                     gatt.discoverServices()
@@ -459,6 +734,10 @@ class BleCyclingSensorManager(private val context: Context) {
                     runCatching { gatt.close() }
                     activeGatt = null
                 }
+                staleWatchdogJob?.cancel()
+                staleWatchdogJob = null
+                lastWheelPacketAtMillis = 0L
+                lastCrankPacketAtMillis = 0L
                 _sensorState.update {
                     it.copy(
                         connectionStatus = BleConnectionStatus.DISCONNECTED,
@@ -590,16 +869,183 @@ class BleCyclingSensorManager(private val context: Context) {
         )
     }
 
+    private val hrScanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val device = result.device ?: return
+            val address = device.address ?: return
+            val deviceName = if (hasConnectPermission()) {
+                result.scanRecord?.deviceName ?: device.name ?: "HR Monitor (${address.takeLast(5)})"
+            } else {
+                result.scanRecord?.deviceName ?: "HR Monitor (${address.takeLast(5)})"
+            }
+            val candidate = DiscoveredBleSensor(
+                name = deviceName,
+                address = address,
+                rssi = result.rssi
+            )
+            _sensorState.update { current ->
+                val updatedList = (current.discoveredHrSensors.filterNot { it.address == address } + candidate)
+                    .sortedByDescending { it.rssi }
+                current.copy(
+                    discoveredHrSensors = updatedList,
+                    hrStatusMessage = "Found ${updatedList.size} BLE heart rate sensor(s)"
+                )
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            _sensorState.update {
+                it.copy(
+                    isScanningHr = false,
+                    hrStatusMessage = "BLE HR sensor scan failed (code $errorCode)."
+                )
+            }
+        }
+    }
+
+    private val hrGattCallback = object : BluetoothGattCallback() {
+        @SuppressLint("MissingPermission")
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (activeHrGatt != null && activeHrGatt !== gatt) {
+                if (hasConnectPermission()) {
+                    runCatching { gatt.close() }
+                }
+                return
+            }
+            if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                if (hasConnectPermission()) {
+                    gatt.discoverServices()
+                }
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                if (activeHrGatt == gatt && hasConnectPermission()) {
+                    runCatching { gatt.close() }
+                    activeHrGatt = null
+                }
+                staleHrWatchdogJob?.cancel()
+                staleHrWatchdogJob = null
+                lastHrPacketAtMillis = 0L
+                _sensorState.update {
+                    it.copy(
+                        hrConnectionStatus = BleConnectionStatus.DISCONNECTED,
+                        liveHeartRateBpm = null,
+                        hrStatusMessage = if (status != BluetoothGatt.GATT_SUCCESS) {
+                            "HR sensor disconnected (status $status)"
+                        } else {
+                            "HR sensor disconnected"
+                        }
+                    )
+                }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                _sensorState.update {
+                    it.copy(
+                        hrConnectionStatus = BleConnectionStatus.ERROR,
+                        hrStatusMessage = "Could not read heart rate sensor services."
+                    )
+                }
+                return
+            }
+
+            val hrService = gatt.getService(HR_SERVICE_UUID)
+            val hrChar = hrService?.getCharacteristic(HR_MEASUREMENT_CHAR_UUID)
+            if (hrChar == null) {
+                _sensorState.update {
+                    it.copy(
+                        hrConnectionStatus = BleConnectionStatus.ERROR,
+                        hrStatusMessage = "Device does not expose Heart Rate service (0x180D)."
+                    )
+                }
+                return
+            }
+
+            if (!hasConnectPermission()) return
+            gatt.setCharacteristicNotification(hrChar, true)
+            val cccd = hrChar.getDescriptor(CCCD_UUID)
+            if (cccd != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    @Suppress("DEPRECATION")
+                    gatt.writeDescriptor(cccd)
+                }
+            }
+
+            val sensorName = _sensorState.value.pairedHrSensor?.name ?: "Heart Rate Monitor"
+            _sensorState.update {
+                it.copy(
+                    hrConnectionStatus = BleConnectionStatus.CONNECTED,
+                    hrStatusMessage = "Connected to $sensorName"
+                )
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            handleHrPacket(characteristic.uuid, value)
+        }
+
+        @Suppress("DEPRECATION")
+        @Deprecated("Deprecated in API 33")
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                val value = characteristic.value ?: return
+                handleHrPacket(characteristic.uuid, value)
+            }
+        }
+    }
+
+    private fun handleHrPacket(charUuid: UUID, bytes: ByteArray) {
+        if (charUuid != HR_MEASUREMENT_CHAR_UUID) return
+        val parsed = HrMeasurementParser.parse(bytes) ?: return
+
+        val now = System.currentTimeMillis()
+        lastHrPacketAtMillis = now
+
+        val sensorName = _sensorState.value.pairedHrSensor?.name ?: "Heart Rate Monitor"
+
+        _sensorState.update { current ->
+            current.copy(
+                hrConnectionStatus = BleConnectionStatus.CONNECTED,
+                liveHeartRateBpm = parsed.heartRateBpm
+            )
+        }
+
+        _hrReadings.tryEmit(
+            HrSensorReading(
+                sensorName = sensorName,
+                heartRateBpm = parsed.heartRateBpm,
+                timestampMillis = now
+            )
+        )
+    }
+
     companion object {
         private const val PREFS_NAME = "singletrack_ble_prefs"
         private const val KEY_SENSOR_ADDRESS = "paired_sensor_address"
         private const val KEY_SENSOR_NAME = "paired_sensor_name"
         private const val KEY_WHEEL_CIRC_MM = "wheel_circumference_mm"
+        private const val KEY_HR_SENSOR_ADDRESS = "paired_hr_sensor_address"
+        private const val KEY_HR_SENSOR_NAME = "paired_hr_sensor_name"
         private const val SCAN_TIMEOUT_MS = 12_000L
         const val READING_FRESH_WINDOW_MS = 4_500L
 
         val CSC_SERVICE_UUID: UUID = UUID.fromString("00001816-0000-1000-8000-00805f9b34fb")
         val CSC_MEASUREMENT_CHAR_UUID: UUID = UUID.fromString("00002a5b-0000-1000-8000-00805f9b34fb")
+        val HR_SERVICE_UUID: UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
+        val HR_MEASUREMENT_CHAR_UUID: UUID = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
         val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         fun requiredPermissions(): Array<String> {

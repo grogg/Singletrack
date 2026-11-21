@@ -55,8 +55,15 @@ object GpxExporter {
             if (ride.avgCadenceRpm != null) {
                 append(", Avg Cadence: ${ride.avgCadenceRpm} rpm")
             }
-            if (!ride.sensorName.isNullOrBlank()) {
-                append(" (Sensor: ${ride.sensorName})")
+            if (ride.avgHeartRateBpm != null) {
+                append(", Avg HR: ${ride.avgHeartRateBpm} bpm")
+            }
+            val sensorNames = listOfNotNull(
+                ride.sensorName?.takeIf { it.isNotBlank() },
+                ride.hrSensorName?.takeIf { it.isNotBlank() }
+            ).distinct()
+            if (sensorNames.isNotEmpty()) {
+                append(" (Sensors: ${sensorNames.joinToString(", ")})")
             }
         }
         sb.append("    <desc>${escapeXml(desc)}</desc>\n")
@@ -82,10 +89,15 @@ object GpxExporter {
                     sb.append(String.format(Locale.US, "        <ele>%.1f</ele>\n", alt))
                 }
                 sb.append("        <time>${Instant.ofEpochMilli(sample.timestampMillis)}</time>\n")
-                if (sample.cadenceRpm != null) {
+                if (sample.cadenceRpm != null || sample.heartRateBpm != null) {
                     sb.append("        <extensions>\n")
                     sb.append("          <gpxtpx:TrackPointExtension>\n")
-                    sb.append("            <gpxtpx:cad>${sample.cadenceRpm}</gpxtpx:cad>\n")
+                    sample.heartRateBpm?.let { hr ->
+                        sb.append("            <gpxtpx:hr>$hr</gpxtpx:hr>\n")
+                    }
+                    sample.cadenceRpm?.let { cad ->
+                        sb.append("            <gpxtpx:cad>$cad</gpxtpx:cad>\n")
+                    }
                     sb.append("          </gpxtpx:TrackPointExtension>\n")
                     sb.append("        </extensions>\n")
                 }

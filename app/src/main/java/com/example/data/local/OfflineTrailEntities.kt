@@ -72,5 +72,8 @@ data class RideEntity(
     val healthConnectSessionId: String?,
     val avgCadenceRpm: Int? = null,
     val maxCadenceRpm: Int? = null,
-    val sensorName: String? = null
+    val sensorName: String? = null,
+    val avgHeartRateBpm: Int? = null,
+    val maxHeartRateBpm: Int? = null,
+    val hrSensorName: String? = null
 )

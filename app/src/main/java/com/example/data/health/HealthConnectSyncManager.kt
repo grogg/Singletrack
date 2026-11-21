@@ -8,6 +8,7 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.SpeedRecord
 import androidx.health.connect.client.records.metadata.Device
@@ -39,7 +40,8 @@ class HealthConnectSyncManager(private val context: Context) {
             HealthPermission.getWritePermission(ExerciseSessionRecord::class),
             HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE,
             HealthPermission.getWritePermission(DistanceRecord::class),
-            HealthPermission.getWritePermission(SpeedRecord::class)
+            HealthPermission.getWritePermission(SpeedRecord::class),
+            HealthPermission.getWritePermission(HeartRateRecord::class)
         )
 
         val CORE_PERMISSIONS: Set<String> = setOf(
@@ -136,12 +138,16 @@ class HealthConnectSyncManager(private val context: Context) {
                 append(
                     String.format(
                         Locale.US,
-                        "Distance: %.2f mi, Avg: %.1f mph, Elev Gain: %.0f ft (Recorded with Singletrack)",
+                        "Distance: %.2f mi, Avg: %.1f mph, Elev Gain: %.0f ft",
                         ride.distanceMiles,
                         ride.avgSpeedMph,
                         ride.elevationGainFeet
                     )
                 )
+                ride.avgHeartRateBpm?.let { avgHr ->
+                    append(", Avg HR: $avgHr bpm")
+                }
+                append(" (Recorded with Singletrack)")
             }
 
             val recordsToInsert = mutableListOf<Record>()
@@ -204,6 +210,37 @@ class HealthConnectSyncManager(private val context: Context) {
                         metadata = Metadata.activelyRecorded(
                             device = Device(type = Device.TYPE_PHONE),
                             clientRecordId = "singletrack_speed_${ride.id}"
+                        )
+                    )
+                )
+            }
+
+            val canWriteHeartRate = granted.contains(
+                HealthPermission.getWritePermission(HeartRateRecord::class)
+            )
+            val hrSamples = ride.samples
+                .filter {
+                    val hr = it.heartRateBpm
+                    hr != null && hr > 0 && it.timestampMillis in ride.startTimeMillis..ride.endTimeMillis
+                }
+                .distinctBy { it.timestampMillis }
+                .sortedBy { it.timestampMillis }
+            if (canWriteHeartRate && hrSamples.isNotEmpty()) {
+                recordsToInsert.add(
+                    HeartRateRecord(
+                        startTime = startInstant,
+                        startZoneOffset = startOffset,
+                        endTime = endInstant,
+                        endZoneOffset = endOffset,
+                        samples = hrSamples.map { sample ->
+                            HeartRateRecord.Sample(
+                                time = Instant.ofEpochMilli(sample.timestampMillis),
+                                beatsPerMinute = (sample.heartRateBpm ?: 0).toLong()
+                            )
+                        },
+                        metadata = Metadata.activelyRecorded(
+                            device = Device(type = Device.TYPE_PHONE),
+                            clientRecordId = "singletrack_hr_${ride.id}"
                         )
                     )
                 )
