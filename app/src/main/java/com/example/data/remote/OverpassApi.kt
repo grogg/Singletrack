@@ -1,7 +1,6 @@
 package com.example.data.remote
 
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -29,9 +28,7 @@ object OverpassClient {
     )
 
     private val moshi: Moshi by lazy {
-        Moshi.Builder()
-            .addLast(KotlinJsonAdapterFactory())
-            .build()
+        Moshi.Builder().build()
     }
 
     val okHttpClient: OkHttpClient by lazy {

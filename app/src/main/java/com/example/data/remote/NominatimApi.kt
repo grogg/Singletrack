@@ -3,7 +3,6 @@ package com.example.data.remote
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
@@ -41,9 +40,7 @@ interface NominatimService {
 
 object NominatimClient {
     private val moshi: Moshi by lazy {
-        Moshi.Builder()
-            .addLast(KotlinJsonAdapterFactory())
-            .build()
+        Moshi.Builder().build()
     }
 
     val service: NominatimService by lazy {
