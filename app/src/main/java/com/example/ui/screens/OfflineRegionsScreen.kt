@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -32,6 +33,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -52,9 +55,13 @@ fun OfflineRegionsScreen(
     regions: List<OfflineRegion>,
     activeLocation: LocationPlace?,
     measurementUnit: MeasurementUnit,
+    loadOfflineByDefault: Boolean,
+    defaultOfflineRegionId: String?,
     isDownloadingRegion: Boolean,
     downloadingRegionName: String?,
     onOpenSettings: () -> Unit,
+    onToggleLoadOfflineByDefault: (Boolean) -> Unit,
+    onSetDefaultOfflineRegion: (OfflineRegion) -> Unit,
     onDownloadCurrentArea: () -> Unit,
     onOpenRegionPicker: () -> Unit,
     onOpenOfflineRegion: (OfflineRegion) -> Unit,
@@ -62,6 +69,9 @@ fun OfflineRegionsScreen(
     onDeleteRegion: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val resolvedDefaultId = regions.firstOrNull { it.id == defaultOfflineRegionId }?.id
+        ?: regions.firstOrNull()?.id
+    val defaultRegionName = regions.firstOrNull { it.id == resolvedDefaultId }?.name
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -103,7 +113,8 @@ fun OfflineRegionsScreen(
         item(key = "download_actions") {
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -153,6 +164,46 @@ fun OfflineRegionsScreen(
             }
         }
 
+        item(key = "startup_default_card") {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Load Offline Map on Launch",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = when {
+                                loadOfflineByDefault && defaultRegionName != null ->
+                                    "Opens $defaultRegionName automatically when the app starts."
+                                loadOfflineByDefault ->
+                                    "Download a region below to load it automatically on startup."
+                                else ->
+                                    "When off, the app scans your GPS area online at launch."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = loadOfflineByDefault,
+                        onCheckedChange = onToggleLoadOfflineByDefault,
+                        modifier = Modifier.testTag("offline_default_switch")
+                    )
+                }
+            }
+        }
+
         if (regions.isEmpty()) {
             item(key = "empty_offline") {
                 Card(
@@ -191,6 +242,9 @@ fun OfflineRegionsScreen(
                 OfflineRegionCard(
                     region = region,
                     isUpdating = isDownloadingRegion && downloadingRegionName == region.name,
+                    isDefaultOnLaunch = region.id == resolvedDefaultId,
+                    showDefaultControls = loadOfflineByDefault || regions.size > 1,
+                    onSetDefault = { onSetDefaultOfflineRegion(region) },
                     onOpen = { onOpenOfflineRegion(region) },
                     onUpdate = { onUpdateRegion(region) },
                     onDelete = { onDeleteRegion(region.id) }
@@ -204,6 +258,9 @@ fun OfflineRegionsScreen(
 private fun OfflineRegionCard(
     region: OfflineRegion,
     isUpdating: Boolean,
+    isDefaultOnLaunch: Boolean,
+    showDefaultControls: Boolean,
+    onSetDefault: () -> Unit,
     onOpen: () -> Unit,
     onUpdate: () -> Unit,
     onDelete: () -> Unit
@@ -263,6 +320,46 @@ private fun OfflineRegionCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            if (showDefaultControls) {
+                if (isDefaultOnLaunch) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Default Startup Offline Map",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = onSetDefault,
+                        modifier = Modifier.testTag("set_default_region_${region.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Star,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Set as Default Startup Map")
+                    }
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),

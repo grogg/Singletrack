@@ -40,6 +40,10 @@ class TrailRepository(
         }
     }
 
+    suspend fun getOfflineRegionsOnce(): List<OfflineRegion> = withContext(Dispatchers.IO) {
+        offlineTrailDao.getAllRegionsOnce().map { it.toDomain() }
+    }
+
     suspend fun fetchTrailsNear(lat: Double, lon: Double): Result<TrailScanResult> = withContext(Dispatchers.IO) {
         try {
             // For a 20-mile radius, fetch geometry directly so trail routes overlay on the topo map

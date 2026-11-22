@@ -480,7 +480,8 @@ fun TrailRadarMap(
                     FilledIconButton(
                         onClick = onToggleFullScreen,
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
                         modifier = Modifier
                             .size(48.dp)
@@ -503,7 +504,8 @@ fun TrailRadarMap(
                 FilledIconButton(
                     onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     modifier = Modifier
                         .size(48.dp)
@@ -514,7 +516,8 @@ fun TrailRadarMap(
                 FilledIconButton(
                     onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     modifier = Modifier
                         .size(48.dp)
@@ -529,7 +532,8 @@ fun TrailRadarMap(
                         zoom = startZoom
                     },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     modifier = Modifier
                         .size(48.dp)
@@ -548,7 +552,8 @@ fun TrailRadarMap(
                         .padding(12.dp),
                     shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
@@ -574,6 +579,7 @@ fun TrailRadarMap(
                             Text(
                                 text = trail.name,
                                 style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )

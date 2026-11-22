@@ -386,9 +386,13 @@ fun SingletrackApp(
                                 regions = state.offlineRegions,
                                 activeLocation = state.activeLocation,
                                 measurementUnit = state.measurementUnit,
+                                loadOfflineByDefault = state.loadOfflineMapsByDefault,
+                                defaultOfflineRegionId = state.defaultOfflineRegionId,
                                 isDownloadingRegion = state.isDownloadingRegion,
                                 downloadingRegionName = state.downloadingRegionName,
                                 onOpenSettings = { showSettingsDialog = true },
+                                onToggleLoadOfflineByDefault = viewModel::setLoadOfflineMapsByDefault,
+                                onSetDefaultOfflineRegion = viewModel::setDefaultOfflineRegion,
                                 onDownloadCurrentArea = viewModel::downloadActiveRegionForOffline,
                                 onOpenRegionPicker = {
                                     pickerPurpose = PickerPurpose.OFFLINE_DOWNLOAD
@@ -609,6 +613,11 @@ fun SingletrackApp(
         UnitSettingsDialog(
             currentUnit = state.measurementUnit,
             onSelectUnit = viewModel::setMeasurementUnit,
+            loadOfflineByDefault = state.loadOfflineMapsByDefault,
+            offlineRegions = state.offlineRegions,
+            defaultOfflineRegionId = state.defaultOfflineRegionId,
+            onToggleLoadOfflineByDefault = viewModel::setLoadOfflineMapsByDefault,
+            onSelectDefaultOfflineRegion = viewModel::setDefaultOfflineRegion,
             bleSensorState = state.bleSensorState,
             onRequestBleScan = requestBleScan,
             onStopBleScan = viewModel::stopBleSensorScan,

@@ -20,7 +20,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.BluetoothSearching
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -31,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,19 +41,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.example.domain.model.BleConnectionStatus
 import com.example.domain.model.BleSensorUiState
 import com.example.domain.model.DiscoveredBleSensor
 import com.example.domain.model.MeasurementUnit
+import com.example.domain.model.OfflineRegion
 import com.example.domain.model.WheelCircumferencePreset
 
 @Composable
 fun UnitSettingsDialog(
     currentUnit: MeasurementUnit,
     onSelectUnit: (MeasurementUnit) -> Unit,
+    loadOfflineByDefault: Boolean = false,
+    offlineRegions: List<OfflineRegion> = emptyList(),
+    defaultOfflineRegionId: String? = null,
+    onToggleLoadOfflineByDefault: (Boolean) -> Unit = {},
+    onSelectDefaultOfflineRegion: (OfflineRegion) -> Unit = {},
     bleSensorState: BleSensorUiState = BleSensorUiState(),
     onRequestBleScan: () -> Unit = {},
     onStopBleScan: () -> Unit = {},
@@ -150,6 +163,99 @@ fun UnitSettingsDialog(
                                             text = unit.summary,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    // Section 1B: Offline Maps Startup Preference
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.CloudOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Offline Maps on Startup",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+
+                        val activeDefaultRegion = offlineRegions.firstOrNull {
+                            it.id == defaultOfflineRegionId
+                        } ?: offlineRegions.firstOrNull()
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onToggleLoadOfflineByDefault(!loadOfflineByDefault) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Load downloaded offline maps by default",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = when {
+                                            loadOfflineByDefault && activeDefaultRegion != null ->
+                                                "Opens ${activeDefaultRegion.name} automatically when the app starts."
+                                            loadOfflineByDefault ->
+                                                "Download an offline region to load it automatically on launch."
+                                            else ->
+                                                "Uses online GPS trail scan when the app opens."
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = loadOfflineByDefault,
+                                    onCheckedChange = onToggleLoadOfflineByDefault,
+                                    modifier = Modifier.testTag("settings_offline_default_switch")
+                                )
+                            }
+                        }
+
+                        if (loadOfflineByDefault && offlineRegions.size > 1) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Default Startup Region",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    offlineRegions.forEach { region ->
+                                        val isDefault = region.id == activeDefaultRegion?.id
+                                        FilterChip(
+                                            selected = isDefault,
+                                            onClick = { onSelectDefaultOfflineRegion(region) },
+                                            label = { Text(region.name) },
+                                            modifier = Modifier.testTag("settings_default_region_${region.id}")
                                         )
                                     }
                                 }
@@ -629,6 +735,109 @@ fun UnitSettingsDialog(
                             }
                         }
                     }
+
+                    HorizontalDivider()
+
+                    // Section 4: About & Data Privacy
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.testTag("settings_about_section")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "About",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Singletrack MTB does not have a developer backend, user accounts, advertising SDKs, crash-reporting SDKs, or analytics/tracking libraries, and it does not collect or sell personal data.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+
+                        Text(
+                            text = "Here is a complete breakdown of where data is stored and when any data leaves the app:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        AboutGroupCard(
+                            title = "1. Stored Locally on Your Device",
+                            items = listOf(
+                                labeledLine(
+                                    "Ride Recordings & Biometrics: ",
+                                    "GPS tracks, distance, speed, elevation gain, cycling cadence, and heart rate (BPM) data are stored locally in the on-device database."
+                                ),
+                                labeledLine(
+                                    "Bluetooth Sensors & Settings: ",
+                                    "Paired speed/cadence and heart rate sensor names/addresses and unit preferences (imperial/metric) are saved locally in app preferences."
+                                ),
+                                labeledLine(
+                                    "Offline Trail Regions: ",
+                                    "Downloaded trail lists and geometry are cached locally on your device."
+                                )
+                            )
+                        )
+
+                        AboutGroupCard(
+                            title = "2. Network Requests to Public Map & Trail Services (Read-Only)",
+                            intro = "When online features are used, the app sends only the coordinates, map tile indices, or search text needed to fetch trail and map data:",
+                            items = listOf(
+                                labeledLine(
+                                    "Trail Discovery (OpenStreetMap Overpass API): ",
+                                    "Sends the active search center coordinates (current GPS or selected city/region) to find nearby MTB trails."
+                                ),
+                                labeledLine(
+                                    "Location Search & Area Labels (OpenStreetMap Nominatim): ",
+                                    "Sends your typed place query or coordinates to resolve city/trailhead names."
+                                ),
+                                labeledLine(
+                                    "Trail Elevation Profiles (Open-Meteo & OpenTopoData): ",
+                                    "Sends sampled coordinates of a selected trail to retrieve elevation points."
+                                ),
+                                labeledLine(
+                                    "Topographic Map Tiles (OpenTopoMap & ArcGIS World Topo): ",
+                                    "Requests standard map tile images (z/x/y) for the viewed map area."
+                                )
+                            ),
+                            footnote = "(As with any standard HTTPS request, these public services receive your device IP address and the requested coordinates/tile region when queried.)"
+                        )
+
+                        AboutGroupCard(
+                            title = "3. Optional User-Initiated Sharing & Device Sync",
+                            items = listOf(
+                                labeledLine(
+                                    "Health Connect / Google Fit: ",
+                                    "If you explicitly grant Health Connect permissions and sync a ride (or keep Auto-sync enabled), ride sessions, routes, distance, speed, and heart rate are written to Android Health Connect on your device so apps you connect (such as Google Fit) can read them."
+                                ),
+                                labeledLine(
+                                    "GPX Export, Trail Share & Directions: ",
+                                    "Data is only passed to another app when you tap Share GPX, Save .GPX, Share, or Directions (opening the Android share sheet, file picker, or map app)."
+                                ),
+                                labeledLine(
+                                    "Android Auto Backup: ",
+                                    "System backup is enabled in the manifest (allowBackup=\"true\"), meaning Android OS may back up local app data to your personal Google account if device backup is turned on."
+                                )
+                            )
+                        )
+                    }
                 }
 
                 Row(
@@ -642,6 +851,59 @@ fun UnitSettingsDialog(
                         Text("Done")
                     }
                 }
+            }
+        }
+    }
+}
+
+private fun labeledLine(label: String, detail: String): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
+        append(label)
+    }
+    append(detail)
+}
+
+@Composable
+private fun AboutGroupCard(
+    title: String,
+    intro: String? = null,
+    items: List<AnnotatedString>,
+    footnote: String? = null
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (intro != null) {
+                Text(
+                    text = intro,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            items.forEach { itemText ->
+                Text(
+                    text = itemText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (footnote != null) {
+                Text(
+                    text = footnote,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

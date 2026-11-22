@@ -395,7 +395,8 @@ fun RecordedRideTopoMap(
                     FilledIconButton(
                         onClick = onToggleFullScreen,
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
                         modifier = Modifier
                             .size(48.dp)
@@ -416,7 +417,8 @@ fun RecordedRideTopoMap(
                 FilledIconButton(
                     onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     modifier = Modifier
                         .size(48.dp)
@@ -427,7 +429,8 @@ fun RecordedRideTopoMap(
                 FilledIconButton(
                     onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     modifier = Modifier
                         .size(48.dp)
@@ -442,7 +445,8 @@ fun RecordedRideTopoMap(
                         zoom = initialBounds.zoom
                     },
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     modifier = Modifier
                         .size(48.dp)

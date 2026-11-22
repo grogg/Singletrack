@@ -42,6 +42,8 @@ data class MainUiState(
     val isLoadingElevation: Boolean = false,
     val isFullScreenMap: Boolean = false,
     val offlineRegions: List<OfflineRegion> = emptyList(),
+    val loadOfflineMapsByDefault: Boolean = false,
+    val defaultOfflineRegionId: String? = null,
     val isDownloadingRegion: Boolean = false,
     val downloadingRegionName: String? = null,
     val isCurrentAreaSavedOffline: Boolean = false,

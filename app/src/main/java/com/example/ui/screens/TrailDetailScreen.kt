@@ -176,7 +176,8 @@ fun TrailDetailScreen(
                     FilledIconButton(
                         onClick = { onExpandOnTopoMap(trail) },
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f)
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.94f),
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)

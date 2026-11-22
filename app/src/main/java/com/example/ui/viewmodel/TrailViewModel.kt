@@ -63,6 +63,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(
         MainUiState(
             measurementUnit = loadSavedUnit(),
+            loadOfflineMapsByDefault = loadSavedOfflineDefault(),
+            defaultOfflineRegionId = loadSavedDefaultOfflineRegionId(),
             hasLocationPermission = locationProvider.hasLocationPermission(),
             bleSensorState = bleSensorManager.sensorState.value
         )
@@ -84,15 +86,30 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         observeLocalData()
         observeBleSensors()
         refreshHealthConnectStatus()
-        if (locationProvider.hasLocationPermission()) {
-            locateAndScanCurrentPosition()
-        }
+        initializeStartupTrails()
         if (bleSensorManager.hasRequiredPermissions()) {
             if (bleSensorManager.sensorState.value.pairedSensor != null) {
                 bleSensorManager.connectPairedSensor()
             }
             if (bleSensorManager.sensorState.value.pairedHrSensor != null) {
                 bleSensorManager.connectPairedHrSensor()
+            }
+        }
+    }
+
+    private fun initializeStartupTrails() {
+        viewModelScope.launch {
+            if (_uiState.value.loadOfflineMapsByDefault) {
+                val regions = trailRepository.getOfflineRegionsOnce()
+                val preferredId = _uiState.value.defaultOfflineRegionId
+                val targetRegion = regions.firstOrNull { it.id == preferredId } ?: regions.firstOrNull()
+                if (targetRegion != null) {
+                    openOfflineRegion(targetRegion)
+                    return@launch
+                }
+            }
+            if (locationProvider.hasLocationPermission()) {
+                locateAndScanCurrentPosition()
             }
         }
     }
@@ -284,6 +301,42 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadSavedUnit(): MeasurementUnit {
         val raw = prefs.getString(KEY_MEASUREMENT_UNIT, null)
         return MeasurementUnit.entries.firstOrNull { it.name == raw } ?: MeasurementUnit.IMPERIAL
+    }
+
+    private fun loadSavedOfflineDefault(): Boolean {
+        return prefs.getBoolean(KEY_LOAD_OFFLINE_BY_DEFAULT, false)
+    }
+
+    private fun loadSavedDefaultOfflineRegionId(): String? {
+        return prefs.getString(KEY_DEFAULT_OFFLINE_REGION_ID, null)
+    }
+
+    fun setLoadOfflineMapsByDefault(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_LOAD_OFFLINE_BY_DEFAULT, enabled) }
+        _uiState.update { state ->
+            val fallbackId = if (enabled && state.defaultOfflineRegionId == null) {
+                state.offlineRegions.firstOrNull()?.id
+            } else {
+                state.defaultOfflineRegionId
+            }
+            if (fallbackId != state.defaultOfflineRegionId && fallbackId != null) {
+                prefs.edit { putString(KEY_DEFAULT_OFFLINE_REGION_ID, fallbackId) }
+            }
+            state.copy(
+                loadOfflineMapsByDefault = enabled,
+                defaultOfflineRegionId = fallbackId
+            )
+        }
+    }
+
+    fun setDefaultOfflineRegion(region: OfflineRegion) {
+        prefs.edit { putString(KEY_DEFAULT_OFFLINE_REGION_ID, region.id) }
+        _uiState.update {
+            it.copy(
+                defaultOfflineRegionId = region.id,
+                snackbarMessage = "${region.name} set as default offline map on launch"
+            )
+        }
     }
 
     fun onLocationPermissionResult(granted: Boolean) {
@@ -668,7 +721,26 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteOfflineRegion(regionId: String) {
         viewModelScope.launch {
             trailRepository.deleteOfflineRegion(regionId)
-            _uiState.update { it.copy(snackbarMessage = "Offline region removed") }
+            if (_uiState.value.defaultOfflineRegionId == regionId) {
+                val nextDefault = _uiState.value.offlineRegions
+                    .firstOrNull { it.id != regionId }
+                    ?.id
+                prefs.edit {
+                    if (nextDefault != null) {
+                        putString(KEY_DEFAULT_OFFLINE_REGION_ID, nextDefault)
+                    } else {
+                        remove(KEY_DEFAULT_OFFLINE_REGION_ID)
+                    }
+                }
+                _uiState.update {
+                    it.copy(
+                        defaultOfflineRegionId = nextDefault,
+                        snackbarMessage = "Offline region removed"
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(snackbarMessage = "Offline region removed") }
+            }
         }
     }
 
@@ -1174,5 +1246,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val KEY_MEASUREMENT_UNIT = "measurement_unit"
+        private const val KEY_LOAD_OFFLINE_BY_DEFAULT = "load_offline_by_default"
+        private const val KEY_DEFAULT_OFFLINE_REGION_ID = "default_offline_region_id"
     }
 }
