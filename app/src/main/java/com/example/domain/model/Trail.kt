@@ -1,5 +1,7 @@
 package com.example.domain.model
 
+import androidx.compose.runtime.Immutable
+
 enum class TrailDifficulty(
     val label: String,
     val shortLabel: String,
@@ -55,11 +57,13 @@ enum class MeasurementUnit(val label: String, val summary: String) {
     METRIC("Metric", "Kilometers (km), km/h, meters (m)")
 }
 
+@Immutable
 data class GeoPoint(
     val lat: Double,
     val lon: Double
 )
 
+@Immutable
 data class ElevationPoint(
     val distanceMiles: Double,
     val elevationFeet: Double
@@ -72,6 +76,7 @@ enum class PhysicalEffortRating(val label: String) {
     GRUELING("Grueling")
 }
 
+@Immutable
 data class TrailElevationProfile(
     val elevationGainFeet: Int,
     val elevationLossFeet: Int,
@@ -98,6 +103,7 @@ data class TrailElevationProfile(
         }
 }
 
+@Immutable
 data class Trail(
     val osmKey: String,
     val osmType: String,
@@ -125,6 +131,7 @@ data class Trail(
     val elevationProfile: TrailElevationProfile? = null
 )
 
+@Immutable
 data class LocationPlace(
     val name: String,
     val lat: Double,
@@ -132,6 +139,7 @@ data class LocationPlace(
     val isCurrentGps: Boolean = false
 )
 
+@Immutable
 data class OfflineRegion(
     val id: String,
     val name: String,

@@ -2,10 +2,8 @@ package com.example.data.remote
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
-import com.squareup.moshi.Moshi
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import retrofit2.http.Url
@@ -43,10 +41,6 @@ interface ElevationService {
 }
 
 object ElevationClient {
-    private val moshi: Moshi by lazy {
-        Moshi.Builder().build()
-    }
-
     private val okHttpClient: OkHttpClient by lazy {
         OverpassClient.okHttpClient.newBuilder()
             .connectTimeout(8, TimeUnit.SECONDS)
@@ -59,7 +53,7 @@ object ElevationClient {
         Retrofit.Builder()
             .baseUrl("https://api.open-meteo.com/")
             .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .addConverterFactory(OverpassClient.moshiConverterFactory)
             .build()
             .create(ElevationService::class.java)
     }

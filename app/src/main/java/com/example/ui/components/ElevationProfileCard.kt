@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -308,7 +309,28 @@ private fun ElevationChartCanvas(
     val lineColor = if (isDark) TerracottaBright else Terracotta
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val peakColor = MaterialTheme.colorScheme.primary
-    val totalMiles = (points.lastOrNull()?.distanceMiles ?: 0.0).coerceAtLeast(0.05)
+    val chartStats = remember(points) {
+        val totalMiles = (points.lastOrNull()?.distanceMiles ?: 0.0).coerceAtLeast(0.05)
+        var minVal = Double.POSITIVE_INFINITY
+        var maxVal = Double.NEGATIVE_INFINITY
+        var peakIndex = -1
+        for (i in points.indices) {
+            val elev = points[i].elevationFeet
+            if (elev < minVal) minVal = elev
+            if (elev > maxVal) {
+                maxVal = elev
+                peakIndex = i
+            }
+        }
+        Triple(totalMiles, minVal, Pair((maxVal - minVal).coerceAtLeast(25.0), peakIndex))
+    }
+    val totalMiles = chartStats.first
+    val minVal = chartStats.second
+    val span = chartStats.third.first
+    val peakIndex = chartStats.third.second
+    val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
+    val strokePath = remember { Path() }
+    val fillPath = remember { Path() }
 
     Column(
         modifier = Modifier
@@ -328,48 +350,48 @@ private fun ElevationChartCanvas(
                 val padH = 6.dp.toPx()
                 val chartWidth = (size.width - padH * 2f).coerceAtLeast(1f)
                 val chartHeight = (size.height - padTop - padBottom).coerceAtLeast(1f)
+                val gridStroke = 1.dp.toPx()
 
-                val minVal = points.minOf { it.elevationFeet }
-                val maxVal = points.maxOf { it.elevationFeet }
-                val span = (maxVal - minVal).coerceAtLeast(25.0)
-
-                val dashEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
                 for (step in 0..2) {
                     val y = padTop + chartHeight * (step / 2f)
                     drawLine(
                         color = gridColor,
                         start = Offset(padH, y),
                         end = Offset(size.width - padH, y),
-                        strokeWidth = 1.dp.toPx(),
+                        strokeWidth = gridStroke,
                         pathEffect = dashEffect
                     )
                 }
 
-                val coords = points.map { pt ->
+                fun xFor(pt: ElevationPoint): Float {
                     val xFrac = (pt.distanceMiles / totalMiles).toFloat().coerceIn(0f, 1f)
+                    return padH + xFrac * chartWidth
+                }
+
+                fun yFor(pt: ElevationPoint): Float {
                     val yFrac = ((pt.elevationFeet - minVal) / span).toFloat().coerceIn(0f, 1f)
-                    Offset(
-                        x = padH + xFrac * chartWidth,
-                        y = padTop + chartHeight * (1f - yFrac)
-                    )
+                    return padTop + chartHeight * (1f - yFrac)
                 }
 
-                val strokePath = Path().apply {
-                    moveTo(coords.first().x, coords.first().y)
-                    for (i in 1 until coords.size) {
-                        val prev = coords[i - 1]
-                        val curr = coords[i]
-                        val midX = (prev.x + curr.x) / 2f
-                        cubicTo(midX, prev.y, midX, curr.y, curr.x, curr.y)
-                    }
+                strokePath.reset()
+                var prevX = xFor(points[0])
+                var prevY = yFor(points[0])
+                val firstX = prevX
+                strokePath.moveTo(prevX, prevY)
+                for (i in 1 until points.size) {
+                    val currX = xFor(points[i])
+                    val currY = yFor(points[i])
+                    val midX = (prevX + currX) / 2f
+                    strokePath.cubicTo(midX, prevY, midX, currY, currX, currY)
+                    prevX = currX
+                    prevY = currY
                 }
 
-                val fillPath = Path().apply {
-                    addPath(strokePath)
-                    lineTo(coords.last().x, padTop + chartHeight)
-                    lineTo(coords.first().x, padTop + chartHeight)
-                    close()
-                }
+                fillPath.reset()
+                fillPath.addPath(strokePath)
+                fillPath.lineTo(prevX, padTop + chartHeight)
+                fillPath.lineTo(firstX, padTop + chartHeight)
+                fillPath.close()
 
                 drawPath(
                     path = fillPath,
@@ -393,9 +415,9 @@ private fun ElevationChartCanvas(
                     )
                 )
 
-                val peakIndex = points.indices.maxByOrNull { points[it].elevationFeet }
-                if (peakIndex != null) {
-                    val peakOffset = coords[peakIndex]
+                if (peakIndex in points.indices) {
+                    val peakPt = points[peakIndex]
+                    val peakOffset = Offset(xFor(peakPt), yFor(peakPt))
                     drawCircle(
                         color = Color.White,
                         radius = 5.dp.toPx(),

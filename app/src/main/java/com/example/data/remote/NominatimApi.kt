@@ -2,9 +2,7 @@ package com.example.data.remote
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
-import com.squareup.moshi.Moshi
 import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 
@@ -39,15 +37,11 @@ interface NominatimService {
 }
 
 object NominatimClient {
-    private val moshi: Moshi by lazy {
-        Moshi.Builder().build()
-    }
-
     val service: NominatimService by lazy {
         Retrofit.Builder()
             .baseUrl("https://nominatim.openstreetmap.org/")
             .client(OverpassClient.okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .addConverterFactory(OverpassClient.moshiConverterFactory)
             .build()
             .create(NominatimService::class.java)
     }

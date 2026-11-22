@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,6 +27,17 @@ import com.example.domain.model.GeoPoint
 import com.example.ui.theme.PineDeep
 import com.example.ui.theme.Terracotta
 
+private data class TrailShapeBounds(
+    val segments: List<List<GeoPoint>>,
+    val startPoint: GeoPoint?,
+    val endPoint: GeoPoint?,
+    val totalPoints: Int,
+    val minLat: Double,
+    val maxLat: Double,
+    val minLon: Double,
+    val maxLon: Double
+)
+
 @Composable
 fun TrailShapeCanvas(
     points: List<GeoPoint>,
@@ -34,19 +46,55 @@ fun TrailShapeCanvas(
     emptyText: String = "Trail geometry preview unavailable",
     lineColor: Color = Terracotta
 ) {
-    val effectiveSegments = if (segments.any { it.size >= 2 }) {
-        segments.filter { it.size >= 2 }
-    } else if (points.size >= 2) {
-        listOf(points)
-    } else {
-        emptyList()
+    val shapeData = remember(points, segments) {
+        val effectiveSegments = if (segments.any { it.size >= 2 }) {
+            segments.filter { it.size >= 2 }
+        } else if (points.size >= 2) {
+            listOf(points)
+        } else {
+            emptyList()
+        }
+        var minLat = Double.POSITIVE_INFINITY
+        var maxLat = Double.NEGATIVE_INFINITY
+        var minLon = Double.POSITIVE_INFINITY
+        var maxLon = Double.NEGATIVE_INFINITY
+        var totalCount = 0
+        var firstPt: GeoPoint? = null
+        var lastPt: GeoPoint? = null
+        for (seg in effectiveSegments) {
+            for (pt in seg) {
+                if (firstPt == null) firstPt = pt
+                lastPt = pt
+                if (pt.lat < minLat) minLat = pt.lat
+                if (pt.lat > maxLat) maxLat = pt.lat
+                if (pt.lon < minLon) minLon = pt.lon
+                if (pt.lon > maxLon) maxLon = pt.lon
+                totalCount++
+            }
+        }
+        TrailShapeBounds(
+            segments = effectiveSegments,
+            startPoint = firstPt,
+            endPoint = lastPt,
+            totalPoints = totalCount,
+            minLat = minLat,
+            maxLat = maxLat,
+            minLon = minLon,
+            maxLon = maxLon
+        )
     }
-    val allPoints = effectiveSegments.flatten()
 
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
     val surfaceBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
     val startColor = Color(0xFF2E7D32)
     val endColor = lineColor
+    val glowStroke = remember {
+        Stroke(width = 14f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    }
+    val lineStroke = remember {
+        Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    }
+    val reusablePath = remember { Path() }
 
     Box(
         modifier = modifier
@@ -58,7 +106,7 @@ fun TrailShapeCanvas(
             )
             .semantics { contentDescription = "Topographic route shape preview" }
     ) {
-        if (allPoints.size < 2) {
+        if (shapeData.totalPoints < 2) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val cols = 6
                 val rows = 4
@@ -92,13 +140,8 @@ fun TrailShapeCanvas(
                     drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
                 }
 
-                val minLat = allPoints.minOf { it.lat }
-                val maxLat = allPoints.maxOf { it.lat }
-                val minLon = allPoints.minOf { it.lon }
-                val maxLon = allPoints.maxOf { it.lon }
-
-                val latSpan = (maxLat - minLat).coerceAtLeast(0.0005)
-                val lonSpan = (maxLon - minLon).coerceAtLeast(0.0005)
+                val latSpan = (shapeData.maxLat - shapeData.minLat).coerceAtLeast(0.0005)
+                val lonSpan = (shapeData.maxLon - shapeData.minLon).coerceAtLeast(0.0005)
 
                 val pad = size.minDimension * 0.14f
                 val drawW = (size.width - pad * 2f).coerceAtLeast(1f)
@@ -110,49 +153,41 @@ fun TrailShapeCanvas(
                 val offsetX = (size.width - renderedW) / 2f
                 val offsetY = (size.height - renderedH) / 2f
 
-                fun toOffset(pt: GeoPoint): Offset {
-                    val x = offsetX + ((pt.lon - minLon).toFloat() * scale)
-                    val y = offsetY + ((maxLat - pt.lat).toFloat() * scale)
-                    return Offset(x, y)
-                }
+                fun toX(lon: Double): Float = offsetX + ((lon - shapeData.minLon).toFloat() * scale)
+                fun toY(lat: Double): Float = offsetY + ((shapeData.maxLat - lat).toFloat() * scale)
 
-                for (seg in effectiveSegments) {
-                    val path = Path()
-                    val first = toOffset(seg.first())
-                    path.moveTo(first.x, first.y)
+                for (seg in shapeData.segments) {
+                    reusablePath.reset()
+                    val first = seg.first()
+                    reusablePath.moveTo(toX(first.lon), toY(first.lat))
                     for (i in 1 until seg.size) {
-                        val pt = toOffset(seg[i])
-                        path.lineTo(pt.x, pt.y)
+                        val pt = seg[i]
+                        reusablePath.lineTo(toX(pt.lon), toY(pt.lat))
                     }
 
                     drawPath(
-                        path = path,
+                        path = reusablePath,
                         color = lineColor.copy(alpha = 0.25f),
-                        style = Stroke(
-                            width = 14f,
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
+                        style = glowStroke
                     )
                     drawPath(
-                        path = path,
+                        path = reusablePath,
                         color = lineColor,
-                        style = Stroke(
-                            width = 6f,
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
+                        style = lineStroke
                     )
                 }
 
-                val startOffset = toOffset(allPoints.first())
-                val endOffset = toOffset(allPoints.last())
+                shapeData.startPoint?.let { sp ->
+                    val startOffset = Offset(toX(sp.lon), toY(sp.lat))
+                    drawCircle(color = Color.White, radius = 11f, center = startOffset)
+                    drawCircle(color = startColor, radius = 7.5f, center = startOffset)
+                }
 
-                drawCircle(color = Color.White, radius = 11f, center = startOffset)
-                drawCircle(color = startColor, radius = 7.5f, center = startOffset)
-
-                drawCircle(color = Color.White, radius = 11f, center = endOffset)
-                drawCircle(color = endColor, radius = 7.5f, center = endOffset)
+                shapeData.endPoint?.let { ep ->
+                    val endOffset = Offset(toX(ep.lon), toY(ep.lat))
+                    drawCircle(color = Color.White, radius = 11f, center = endOffset)
+                    drawCircle(color = endColor, radius = 7.5f, center = endOffset)
+                }
             }
 
             Text(

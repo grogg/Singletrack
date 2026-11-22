@@ -62,6 +62,7 @@ import com.example.ui.components.RecordedRideTopoMap
 import com.example.ui.components.TrailRadarMap
 import com.example.ui.components.UnitSettingsDialog
 import com.example.ui.screens.ExploreScreen
+import com.example.ui.screens.LiveRideCockpitScreen
 import com.example.ui.screens.OfflineRegionsScreen
 import com.example.ui.screens.RideDetailScreen
 import com.example.ui.screens.RideScreen
@@ -423,6 +424,7 @@ fun SingletrackApp(
                                         syncingRideId = state.syncingRideId,
                                         hasLocationPermission = state.hasLocationPermission,
                                         onOpenSettings = { showSettingsDialog = true },
+                                        onOpenRecordingScreen = viewModel::openRecordingScreen,
                                         onRequestLocationPermission = requestLocationPermission,
                                         onConnectHealthConnect = {
                                             healthConnectPermissionLauncher.launch(
@@ -496,6 +498,7 @@ fun SingletrackApp(
                                     syncingRideId = state.syncingRideId,
                                     hasLocationPermission = state.hasLocationPermission,
                                     onOpenSettings = { showSettingsDialog = true },
+                                    onOpenRecordingScreen = viewModel::openRecordingScreen,
                                     onRequestLocationPermission = requestLocationPermission,
                                     onConnectHealthConnect = {
                                         healthConnectPermissionLauncher.launch(
@@ -538,6 +541,24 @@ fun SingletrackApp(
                     }
                 }
             }
+        }
+
+        if (state.isRecordingScreenOpen) {
+            LiveRideCockpitScreen(
+                activeRide = state.activeRide,
+                measurementUnit = state.measurementUnit,
+                bleSensorState = state.bleSensorState,
+                hasLocationPermission = state.hasLocationPermission,
+                onClose = viewModel::closeRecordingScreen,
+                onOpenSettings = { showSettingsDialog = true },
+                onRequestLocationPermission = requestLocationPermission,
+                onStartRide = { viewModel.startRide() },
+                onPauseRide = viewModel::pauseRide,
+                onResumeRide = viewModel::resumeRide,
+                onFinishRide = viewModel::finishAndSaveRide,
+                onDiscardRide = viewModel::discardRide,
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
         if (state.isFullScreenMap && state.activeLocation != null) {
@@ -618,6 +639,8 @@ fun SingletrackApp(
             defaultOfflineRegionId = state.defaultOfflineRegionId,
             onToggleLoadOfflineByDefault = viewModel::setLoadOfflineMapsByDefault,
             onSelectDefaultOfflineRegion = viewModel::setDefaultOfflineRegion,
+            openRecordingScreenOnStart = state.openRecordingScreenOnStart,
+            onToggleOpenRecordingScreenOnStart = viewModel::setOpenRecordingScreenOnStart,
             bleSensorState = state.bleSensorState,
             onRequestBleScan = requestBleScan,
             onStopBleScan = viewModel::stopBleSensorScan,

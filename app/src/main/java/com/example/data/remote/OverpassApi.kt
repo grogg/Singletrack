@@ -32,6 +32,10 @@ object OverpassClient {
         Moshi.Builder().build()
     }
 
+    internal val moshiConverterFactory: MoshiConverterFactory by lazy {
+        MoshiConverterFactory.create(moshi)
+    }
+
     val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
@@ -39,7 +43,7 @@ object OverpassClient {
             .writeTimeout(20, TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
-                    .header("User-Agent", "SingletrackAndroidApp/1.0")
+                    .header("User-Agent", "SingletrackMTB/${BuildConfig.VERSION_NAME}")
                     .build()
                 chain.proceed(request)
             }
@@ -58,7 +62,7 @@ object OverpassClient {
         Retrofit.Builder()
             .baseUrl("https://overpass-api.de/")
             .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .addConverterFactory(moshiConverterFactory)
             .build()
             .create(OverpassService::class.java)
     }

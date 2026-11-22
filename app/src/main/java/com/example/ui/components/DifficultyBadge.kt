@@ -31,8 +31,9 @@ import com.example.ui.theme.DifficultyExpertColor
 import com.example.ui.theme.DifficultyIntermediateColor
 import com.example.ui.theme.DifficultyUnratedColor
 import java.text.NumberFormat
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -139,6 +140,13 @@ object FormatUtils {
     const val MILES_TO_KM = 1.609344
     const val FEET_TO_METERS = 0.3048
 
+    private val integerFormatter = ThreadLocal.withInitial {
+        NumberFormat.getIntegerInstance(Locale.US)
+    }
+
+    private val timestampFormatter: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("MMM d, yyyy • h:mm a", Locale.getDefault())
+
     fun distanceValue(miles: Double, unit: MeasurementUnit): Double {
         return when (unit) {
             MeasurementUnit.IMPERIAL -> miles
@@ -176,7 +184,7 @@ object FormatUtils {
     ): String {
         val converted = elevationValue(feet, unit)
         val suffix = if (unit == MeasurementUnit.METRIC) "m" else "ft"
-        val formatted = NumberFormat.getIntegerInstance(Locale.US).format(converted)
+        val formatted = integerFormatter.get()?.format(converted) ?: converted.toString()
         return "$prefix$formatted $suffix"
     }
 
@@ -208,10 +216,20 @@ object FormatUtils {
     }
 
     fun formatDuration(totalSeconds: Long): String {
-        val hours = totalSeconds / 3600
-        val minutes = (totalSeconds % 3600) / 60
-        val seconds = totalSeconds % 60
-        return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+        val safeSeconds = totalSeconds.coerceAtLeast(0L)
+        val hours = safeSeconds / 3600L
+        val minutes = (safeSeconds % 3600L) / 60L
+        val seconds = safeSeconds % 60L
+        return buildString(8) {
+            if (hours < 10L) append('0')
+            append(hours)
+            append(':')
+            if (minutes < 10L) append('0')
+            append(minutes)
+            append(':')
+            if (seconds < 10L) append('0')
+            append(seconds)
+        }
     }
 
     fun formatBytes(bytes: Long): String {
@@ -223,7 +241,8 @@ object FormatUtils {
     }
 
     fun formatTimestamp(millis: Long): String {
-        val sdf = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
-        return sdf.format(Date(millis))
+        return Instant.ofEpochMilli(millis)
+            .atZone(ZoneId.systemDefault())
+            .format(timestampFormatter)
     }
 }

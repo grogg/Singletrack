@@ -17,12 +17,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
-import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,6 +65,8 @@ fun UnitSettingsDialog(
     defaultOfflineRegionId: String? = null,
     onToggleLoadOfflineByDefault: (Boolean) -> Unit = {},
     onSelectDefaultOfflineRegion: (OfflineRegion) -> Unit = {},
+    openRecordingScreenOnStart: Boolean = false,
+    onToggleOpenRecordingScreenOnStart: (Boolean) -> Unit = {},
     bleSensorState: BleSensorUiState = BleSensorUiState(),
     onRequestBleScan: () -> Unit = {},
     onStopBleScan: () -> Unit = {},
@@ -114,7 +117,7 @@ fun UnitSettingsDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // Section 1: Measurement Units
+                    // Measurement Units
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = "Measurement Units",
@@ -172,7 +175,7 @@ fun UnitSettingsDialog(
 
                     HorizontalDivider()
 
-                    // Section 1B: Offline Maps Startup Preference
+                    // Offline Maps Startup Preference
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -265,7 +268,63 @@ fun UnitSettingsDialog(
 
                     HorizontalDivider()
 
-                    // Section 2: Bluetooth Cycling Speed & Cadence Sensors
+                    // Full-Screen Ride Recording Display
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.OpenInFull,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Ride Recording Screen",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onToggleOpenRecordingScreenOnStart(!openRecordingScreenOnStart) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Open recording screen on ride start",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Automatically displays full-screen elapsed time, distance, speed, heart rate, cadence, and elevation when a ride begins.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = openRecordingScreenOnStart,
+                                    onCheckedChange = onToggleOpenRecordingScreenOnStart,
+                                    modifier = Modifier.testTag("settings_cockpit_auto_open_switch")
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    // Bluetooth Cycling Speed & Cadence Sensors
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -460,7 +519,7 @@ fun UnitSettingsDialog(
                                         .fillMaxWidth()
                                         .testTag("ble_scan_button")
                                 ) {
-                                    Icon(Icons.Filled.BluetoothSearching, contentDescription = null)
+                                    Icon(Icons.AutoMirrored.Filled.BluetoothSearching, contentDescription = null)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         if (bleSensorState.pairedSensor != null) {
@@ -527,7 +586,7 @@ fun UnitSettingsDialog(
 
                     HorizontalDivider()
 
-                    // Section 3: Bluetooth Heart Rate Monitor (0x180D)
+                    // Bluetooth Heart Rate Monitor (0x180D)
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -738,7 +797,7 @@ fun UnitSettingsDialog(
 
                     HorizontalDivider()
 
-                    // Section 4: About & Data Privacy
+                    // About & Data Privacy
                     Column(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier.testTag("settings_about_section")

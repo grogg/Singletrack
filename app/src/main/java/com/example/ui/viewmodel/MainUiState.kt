@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import androidx.compose.runtime.Immutable
 import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
@@ -19,6 +20,7 @@ enum class AppDestination(val label: String) {
     RIDE("Ride")
 }
 
+@Immutable
 data class MainUiState(
     val currentDestination: AppDestination = AppDestination.EXPLORE,
     val measurementUnit: MeasurementUnit = MeasurementUnit.IMPERIAL,
@@ -52,6 +54,8 @@ data class MainUiState(
     val isSearchingPlaces: Boolean = false,
     val placeSearchError: String? = null,
     val activeRide: ActiveRideMetrics = ActiveRideMetrics(),
+    val isRecordingScreenOpen: Boolean = false,
+    val openRecordingScreenOnStart: Boolean = false,
     val recordedRides: List<RecordedRide> = emptyList(),
     val selectedRide: RecordedRide? = null,
     val isFullScreenRideMap: Boolean = false,

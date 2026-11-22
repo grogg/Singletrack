@@ -68,6 +68,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             measurementUnit = loadSavedUnit(),
             loadOfflineMapsByDefault = loadSavedOfflineDefault(),
             defaultOfflineRegionId = loadSavedDefaultOfflineRegionId(),
+            openRecordingScreenOnStart = loadSavedOpenRecordingOnStart(),
             hasLocationPermission = locationProvider.hasLocationPermission(),
             bleSensorState = bleSensorManager.sensorState.value
         )
@@ -285,6 +286,23 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeFullScreenRideMap() {
         _uiState.update { it.copy(isFullScreenRideMap = false) }
+    }
+
+    fun openRecordingScreen() {
+        _uiState.update { it.copy(isRecordingScreenOpen = true) }
+    }
+
+    fun closeRecordingScreen() {
+        _uiState.update { it.copy(isRecordingScreenOpen = false) }
+    }
+
+    fun setOpenRecordingScreenOnStart(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_OPEN_RECORDING_SCREEN_ON_START, enabled) }
+        _uiState.update { it.copy(openRecordingScreenOnStart = enabled) }
+    }
+
+    private fun loadSavedOpenRecordingOnStart(): Boolean {
+        return prefs.getBoolean(KEY_OPEN_RECORDING_SCREEN_ON_START, false)
     }
 
     fun notifyMessage(message: String) {
@@ -840,8 +858,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val now = System.currentTimeMillis()
-        _uiState.update {
-            it.copy(
+        _uiState.update { state ->
+            state.copy(
+                isRecordingScreenOpen = if (state.openRecordingScreenOnStart) true else state.isRecordingScreenOpen,
                 activeRide = ActiveRideMetrics(
                     status = RideRecordingStatus.RECORDING,
                     targetTrailName = trailName,
@@ -892,6 +911,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 activeRide = ActiveRideMetrics(),
+                isRecordingScreenOpen = false,
                 snackbarMessage = "Ride discarded"
             )
         }
@@ -949,7 +969,12 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             hrSensorName = if (recordedWithHrSensor) current.hrSensorSourceLabel else null
         )
 
-        _uiState.update { it.copy(activeRide = ActiveRideMetrics()) }
+        _uiState.update {
+            it.copy(
+                activeRide = ActiveRideMetrics(),
+                isRecordingScreenOpen = false
+            )
+        }
 
         viewModelScope.launch {
             rideRepository.saveRide(ride)
@@ -1206,12 +1231,19 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 heartRateBpm = freshHeartRate
             )
 
+            val currentAltFeet = if (location.hasAltitude()) {
+                location.altitude * 3.28084
+            } else {
+                current.currentAltitudeFeet
+            }
+
             state.copy(
                 activeRide = current.copy(
                     distanceMiles = updatedDistance,
                     currentSpeedMph = speedMph,
                     maxSpeedMph = maxOf(current.maxSpeedMph, speedMph),
                     elevationGainFeet = updatedElevGainFeet,
+                    currentAltitudeFeet = currentAltFeet,
                     points = if (shouldAppendPoint) current.points + newPoint else current.points,
                     samples = current.samples + sample
                 )
@@ -1225,14 +1257,14 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         difficulty: TrailDifficulty?,
         sortOrder: TrailSortOrder
     ): List<Trail> {
-        val q = query.trim().lowercase(Locale.US)
+        val trimmedQuery = query.trim()
         val filtered = trails.filter { trail ->
             val matchesDiff = difficulty == null || trail.difficulty == difficulty
-            val matchesQuery = q.isEmpty() ||
-                trail.name.lowercase(Locale.US).contains(q) ||
-                trail.surface.lowercase(Locale.US).contains(q) ||
-                (trail.networkName?.lowercase(Locale.US)?.contains(q) == true) ||
-                (trail.operatorName?.lowercase(Locale.US)?.contains(q) == true)
+            val matchesQuery = trimmedQuery.isEmpty() ||
+                trail.name.contains(trimmedQuery, ignoreCase = true) ||
+                trail.surface.contains(trimmedQuery, ignoreCase = true) ||
+                (trail.networkName?.contains(trimmedQuery, ignoreCase = true) == true) ||
+                (trail.operatorName?.contains(trimmedQuery, ignoreCase = true) == true)
             matchesDiff && matchesQuery
         }
 
@@ -1273,5 +1305,6 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_MEASUREMENT_UNIT = "measurement_unit"
         private const val KEY_LOAD_OFFLINE_BY_DEFAULT = "load_offline_by_default"
         private const val KEY_DEFAULT_OFFLINE_REGION_ID = "default_offline_region_id"
+        private const val KEY_OPEN_RECORDING_SCREEN_ON_START = "open_recording_screen_on_start"
     }
 }

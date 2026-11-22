@@ -1,5 +1,8 @@
 package com.example.domain.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class RideSample(
     val lat: Double,
     val lon: Double,
@@ -10,6 +13,7 @@ data class RideSample(
     val heartRateBpm: Int? = null
 )
 
+@Immutable
 data class RecordedRide(
     val id: String,
     val title: String,
@@ -39,6 +43,7 @@ enum class RideRecordingStatus {
     PAUSED
 }
 
+@Immutable
 data class ActiveRideMetrics(
     val status: RideRecordingStatus = RideRecordingStatus.IDLE,
     val targetTrailName: String? = null,
@@ -48,6 +53,7 @@ data class ActiveRideMetrics(
     val currentSpeedMph: Double = 0.0,
     val maxSpeedMph: Double = 0.0,
     val elevationGainFeet: Double = 0.0,
+    val currentAltitudeFeet: Double? = null,
     val points: List<GeoPoint> = emptyList(),
     val samples: List<RideSample> = emptyList(),
     val currentCadenceRpm: Int? = null,
@@ -71,18 +77,21 @@ enum class WheelCircumferencePreset(
     MTB_26("26\" MTB", "26\" × 2.1 MTB (2070 mm)", 2070)
 }
 
+@Immutable
 data class DiscoveredBleSensor(
     val name: String,
     val address: String,
     val rssi: Int
 )
 
+@Immutable
 data class PairedBleSensor(
     val name: String,
     val address: String,
     val wheelCircumferenceMm: Int = WheelCircumferencePreset.MTB_29.circumferenceMm
 )
 
+@Immutable
 data class PairedHrSensor(
     val name: String,
     val address: String
@@ -95,6 +104,7 @@ enum class BleConnectionStatus {
     ERROR
 }
 
+@Immutable
 data class BleSensorUiState(
     val isBluetoothSupported: Boolean = true,
     val isBluetoothEnabled: Boolean = false,

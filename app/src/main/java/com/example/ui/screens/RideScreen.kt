@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -75,6 +76,7 @@ fun RideScreen(
     syncingRideId: String?,
     hasLocationPermission: Boolean,
     onOpenSettings: () -> Unit,
+    onOpenRecordingScreen: () -> Unit,
     onRequestLocationPermission: () -> Unit,
     onConnectHealthConnect: () -> Unit,
     onInstallHealthConnect: () -> Unit,
@@ -535,6 +537,21 @@ fun RideScreen(
                                 }
                             }
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenRecordingScreen,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("open_recording_screen_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.OpenInFull,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Open Full-Screen Recording View")
                     }
                 }
             }

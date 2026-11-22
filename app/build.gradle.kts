@@ -12,8 +12,8 @@ android {
     applicationId = "com.aistudio.singletrack.mxbkqr"
     minSdk = 26
     targetSdk = 36
-    versionCode = 10
-    versionName = "10.0"
+    versionCode = 11
+    versionName = "11.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -79,7 +79,7 @@ dependencies {
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
-  implementation(libs.androidx.compose.ui.tooling.preview)
+  // implementation(libs.androidx.compose.ui.tooling.preview) // Unused
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.health.connect)
   implementation(libs.androidx.lifecycle.runtime.compose)
@@ -89,9 +89,9 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
-  implementation(libs.kotlinx.coroutines.core)
+  // implementation(libs.kotlinx.coroutines.core) // Provided transitively by kotlinx-coroutines-android
   implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
+  // implementation(libs.moshi.kotlin) // Unused: project uses moshi-kotlin-codegen exclusively
   implementation(libs.okhttp)
   implementation(libs.play.services.location)
   implementation(libs.retrofit)
@@ -107,7 +107,7 @@ dependencies {
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.runner)
   debugImplementation(libs.androidx.compose.ui.test.manifest)
-  debugImplementation(libs.androidx.compose.ui.tooling)
+  // debugImplementation(libs.androidx.compose.ui.tooling) // Unused
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
