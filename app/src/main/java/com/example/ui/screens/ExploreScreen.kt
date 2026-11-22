@@ -605,7 +605,8 @@ private fun TrailCard(
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
             } else {
                 MaterialTheme.colorScheme.surface
-            }
+            },
+            contentColor = MaterialTheme.colorScheme.onSurface
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 3.dp else 1.dp),
         modifier = Modifier

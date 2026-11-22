@@ -56,9 +56,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -182,6 +184,22 @@ fun TrailRadarMap(
         }
     }
 
+    val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f) }
+    val ring10Stroke = remember(dashEffect) { Stroke(width = 2.5f, pathEffect = dashEffect) }
+    val ring20Stroke = remember(dashEffect) { Stroke(width = 4f, pathEffect = dashEffect) }
+    val selectedHaloStroke = remember { Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val selectedCasingStroke = remember { Stroke(width = 10.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val selectedCoreStroke = remember { Stroke(width = 6.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val unselectedCasingStroke = remember { Stroke(width = 6.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val unselectedCoreStroke = remember { Stroke(width = 3.8f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val reusablePath = remember { Path() }
+    val unselectedTrails = remember(trails, selectedPin?.osmKey) {
+        trails.filter { it.osmKey != selectedPin?.osmKey }
+    }
+    val labelLayoutCache = remember(trails, routeLabelStyle) {
+        HashMap<String, TextLayoutResult>()
+    }
+
     val containerShape = if (isFullScreen) RoundedCornerShape(0.dp) else RoundedCornerShape(22.dp)
     val hudPaddingModifier = if (isFullScreen) {
         Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
@@ -198,6 +216,7 @@ fun TrailRadarMap(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, pan, gestureZoom, _ ->
                         val w = size.width.toFloat()
@@ -288,10 +307,6 @@ fun TrailRadarMap(
 
             val w = size.width
             val h = size.height
-            val nextSize = IntSize(w.toInt(), h.toInt())
-            if (canvasSize != nextSize) {
-                canvasSize = nextSize
-            }
 
             // Procedural topo grid fallback underneath tiles
             val gridStep = 64f
@@ -343,29 +358,31 @@ fun TrailRadarMap(
             }
 
             // 2. Geodesic 10-mile and 20-mile boundary circles
-            val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
             drawGeodesicRing(
                 points = innerRing10Mi,
                 toScreen = ::toScreen,
+                reusablePath = reusablePath,
                 color = Color(0xFF133125).copy(alpha = 0.55f),
-                strokeWidth = 2.5f,
-                pathEffect = dashEffect
+                stroke = ring10Stroke
             )
             drawGeodesicRing(
                 points = outerRing20Mi,
                 toScreen = ::toScreen,
+                reusablePath = reusablePath,
                 color = Terracotta.copy(alpha = 0.90f),
-                strokeWidth = 4f,
-                pathEffect = dashEffect
+                stroke = ring20Stroke
             )
 
             // 3. Draw unselected trail routes first, then selected trail route on top
-            val unselectedTrails = trails.filter { it.osmKey != selectedPin?.osmKey }
             for (trail in unselectedTrails) {
                 drawTrailOverlay(
                     trail = trail,
                     color = routeColor(trail.difficulty),
                     isSelected = false,
+                    reusablePath = reusablePath,
+                    haloStroke = selectedHaloStroke,
+                    casingStroke = unselectedCasingStroke,
+                    coreStroke = unselectedCoreStroke,
                     toScreen = ::toScreen
                 )
             }
@@ -374,6 +391,10 @@ fun TrailRadarMap(
                     trail = selected,
                     color = routeColor(selected.difficulty),
                     isSelected = true,
+                    reusablePath = reusablePath,
+                    haloStroke = selectedHaloStroke,
+                    casingStroke = selectedCasingStroke,
+                    coreStroke = selectedCoreStroke,
                     toScreen = ::toScreen
                 )
             }
@@ -383,20 +404,19 @@ fun TrailRadarMap(
                 val labeledTrails = buildList {
                     selectedPin?.let { add(it) }
                     if (zoom >= 12.2f) {
-                        addAll(
-                            trails
-                                .filter { it.osmKey != selectedPin?.osmKey }
-                                .take(14)
-                        )
+                        addAll(unselectedTrails.take(14))
                     }
                 }
                 for (trail in labeledTrails) {
                     val pos = toScreen(GeoPoint(trail.centerLat, trail.centerLon))
                     if (pos.x in -40f..(w + 40f) && pos.y in -40f..(h + 40f)) {
-                        val measured = textMeasurer.measure(
-                            text = trail.name.take(26),
-                            style = routeLabelStyle
-                        )
+                        val labelText = trail.name.take(26)
+                        val measured = labelLayoutCache.getOrPut(labelText) {
+                            textMeasurer.measure(
+                                text = labelText,
+                                style = routeLabelStyle
+                            )
+                        }
                         val padH = 6f
                         val padV = 3f
                         val labelTopLeft = Offset(
@@ -612,23 +632,23 @@ fun TrailRadarMap(
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGeodesicRing(
     points: List<GeoPoint>,
     toScreen: (GeoPoint) -> Offset,
+    reusablePath: Path,
     color: Color,
-    strokeWidth: Float,
-    pathEffect: PathEffect
+    stroke: Stroke
 ) {
     if (points.size < 2) return
-    val path = Path()
+    reusablePath.reset()
     val first = toScreen(points.first())
-    path.moveTo(first.x, first.y)
+    reusablePath.moveTo(first.x, first.y)
     for (i in 1 until points.size) {
         val pt = toScreen(points[i])
-        path.lineTo(pt.x, pt.y)
+        reusablePath.lineTo(pt.x, pt.y)
     }
-    path.close()
+    reusablePath.close()
     drawPath(
-        path = path,
+        path = reusablePath,
         color = color,
-        style = Stroke(width = strokeWidth, pathEffect = pathEffect)
+        style = stroke
     )
 }
 
@@ -636,6 +656,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTrailOverlay(
     trail: Trail,
     color: Color,
     isSelected: Boolean,
+    reusablePath: Path,
+    haloStroke: Stroke,
+    casingStroke: Stroke,
+    coreStroke: Stroke,
     toScreen: (GeoPoint) -> Offset
 ) {
     val segments = if (trail.routeSegments.isNotEmpty()) {
@@ -648,40 +672,32 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTrailOverlay(
 
     for (segment in segments) {
         if (segment.size < 2) continue
-        val path = Path()
+        reusablePath.reset()
         val first = toScreen(segment.first())
-        path.moveTo(first.x, first.y)
+        reusablePath.moveTo(first.x, first.y)
         for (i in 1 until segment.size) {
             val pt = toScreen(segment[i])
-            path.lineTo(pt.x, pt.y)
+            reusablePath.lineTo(pt.x, pt.y)
         }
 
         if (isSelected) {
             drawPath(
-                path = path,
+                path = reusablePath,
                 color = Terracotta.copy(alpha = 0.35f),
-                style = Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                style = haloStroke
             )
         }
 
         drawPath(
-            path = path,
+            path = reusablePath,
             color = Color.White.copy(alpha = if (isSelected) 0.96f else 0.82f),
-            style = Stroke(
-                width = if (isSelected) 10.5f else 6.5f,
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
+            style = casingStroke
         )
 
         drawPath(
-            path = path,
+            path = reusablePath,
             color = color,
-            style = Stroke(
-                width = if (isSelected) 6.5f else 3.8f,
-                cap = StrokeCap.Round,
-                join = StrokeJoin.Round
-            )
+            style = coreStroke
         )
     }
 

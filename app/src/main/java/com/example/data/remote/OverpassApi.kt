@@ -1,5 +1,6 @@
 package com.example.data.remote
 
+import com.example.BuildConfig
 import com.squareup.moshi.Moshi
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -32,9 +33,6 @@ object OverpassClient {
     }
 
     val okHttpClient: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        }
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)
@@ -45,7 +43,14 @@ object OverpassClient {
                     .build()
                 chain.proceed(request)
             }
-            .addInterceptor(logging)
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    val logging = HttpLoggingInterceptor().apply {
+                        level = HttpLoggingInterceptor.Level.BASIC
+                    }
+                    addInterceptor(logging)
+                }
+            }
             .build()
     }
 

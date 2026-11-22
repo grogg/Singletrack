@@ -26,8 +26,9 @@ sealed class DeviceLocationResult {
 }
 
 class LocationProvider(private val context: Context) {
-    private val fusedClient: FusedLocationProviderClient =
+    private val fusedClient: FusedLocationProviderClient by lazy {
         LocationServices.getFusedLocationProviderClient(context)
+    }
 
     fun hasLocationPermission(): Boolean {
         val fine = ContextCompat.checkSelfPermission(

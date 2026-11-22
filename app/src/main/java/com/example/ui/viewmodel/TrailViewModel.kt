@@ -30,6 +30,7 @@ import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailSortOrder
 import com.example.domain.model.TrailViewMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,6 +40,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.util.Locale
 import java.util.UUID
 
@@ -87,18 +90,22 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         observeBleSensors()
         refreshHealthConnectStatus()
         initializeStartupTrails()
-        if (bleSensorManager.hasRequiredPermissions()) {
-            if (bleSensorManager.sensorState.value.pairedSensor != null) {
-                bleSensorManager.connectPairedSensor()
-            }
-            if (bleSensorManager.sensorState.value.pairedHrSensor != null) {
-                bleSensorManager.connectPairedHrSensor()
+        viewModelScope.launch {
+            yield()
+            if (bleSensorManager.hasRequiredPermissions()) {
+                if (bleSensorManager.sensorState.value.pairedSensor != null) {
+                    bleSensorManager.connectPairedSensor()
+                }
+                if (bleSensorManager.sensorState.value.pairedHrSensor != null) {
+                    bleSensorManager.connectPairedHrSensor()
+                }
             }
         }
     }
 
     private fun initializeStartupTrails() {
         viewModelScope.launch {
+            yield()
             if (_uiState.value.loadOfflineMapsByDefault) {
                 val regions = trailRepository.getOfflineRegionsOnce()
                 val preferredId = _uiState.value.defaultOfflineRegionId
@@ -694,17 +701,35 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 referenceLat = region.centerLat,
                 referenceLon = region.centerLon
             )
-            _uiState.update { state ->
-                state.copy(
-                    currentDestination = AppDestination.EXPLORE,
-                    activeLocation = place,
+            val currentState = _uiState.value
+            val sortedTrails = withContext(Dispatchers.Default) {
+                applyFiltersAndSort(
                     trails = trails,
-                    filteredTrails = applyFiltersAndSort(
+                    query = currentState.searchQuery,
+                    difficulty = currentState.selectedDifficulty,
+                    sortOrder = currentState.sortOrder
+                )
+            }
+            _uiState.update { state ->
+                val filtered = if (
+                    state.searchQuery == currentState.searchQuery &&
+                    state.selectedDifficulty == currentState.selectedDifficulty &&
+                    state.sortOrder == currentState.sortOrder
+                ) {
+                    sortedTrails
+                } else {
+                    applyFiltersAndSort(
                         trails = trails,
                         query = state.searchQuery,
                         difficulty = state.selectedDifficulty,
                         sortOrder = state.sortOrder
-                    ),
+                    )
+                }
+                state.copy(
+                    currentDestination = AppDestination.EXPLORE,
+                    activeLocation = place,
+                    trails = trails,
+                    filteredTrails = filtered,
                     isLoadingTrails = false,
                     trailErrorMessage = null,
                     isFromOfflineCache = true,

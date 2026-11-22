@@ -48,16 +48,10 @@ object ElevationClient {
     }
 
     private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
+        OverpassClient.okHttpClient.newBuilder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(12, TimeUnit.SECONDS)
             .writeTimeout(8, TimeUnit.SECONDS)
-            .addInterceptor { chain ->
-                val request = chain.request().newBuilder()
-                    .header("User-Agent", "SingletrackAndroidApp/1.0")
-                    .build()
-                chain.proceed(request)
-            }
             .build()
     }
 

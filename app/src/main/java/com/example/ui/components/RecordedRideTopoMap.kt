@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -149,6 +150,17 @@ fun RecordedRideTopoMap(
         }
     }
 
+    val reusableRoutePath = remember { Path() }
+    val haloStroke = remember { Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val casingStroke = remember { Stroke(width = 10f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val coreStroke = remember { Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val startBadgeLayout = remember(endpointLabelStyle) {
+        textMeasurer.measure(text = "START", style = endpointLabelStyle)
+    }
+    val finishBadgeLayout = remember(endpointLabelStyle) {
+        textMeasurer.measure(text = "FINISH", style = endpointLabelStyle)
+    }
+
     val containerShape = if (isFullScreen) RoundedCornerShape(0.dp) else RoundedCornerShape(20.dp)
     val hudPaddingModifier = if (isFullScreen) {
         Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
@@ -180,6 +192,7 @@ fun RecordedRideTopoMap(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, pan, gestureZoom, _ ->
                         val w = size.width.toFloat()
@@ -218,10 +231,6 @@ fun RecordedRideTopoMap(
 
             val w = size.width
             val h = size.height
-            val nextSize = IntSize(w.toInt(), h.toInt())
-            if (canvasSize != nextSize) {
-                canvasSize = nextSize
-            }
 
             // Procedural topo contour grid fallback underneath tiles
             val gridStep = 64f
@@ -274,32 +283,31 @@ fun RecordedRideTopoMap(
 
             // 2. Recorded GPS route trace
             if (routePoints.size >= 2) {
-                val routePath = Path().apply {
-                    val first = toScreen(routePoints.first())
-                    moveTo(first.x, first.y)
-                    for (i in 1 until routePoints.size) {
-                        val pt = toScreen(routePoints[i])
-                        lineTo(pt.x, pt.y)
-                    }
+                reusableRoutePath.reset()
+                val first = toScreen(routePoints.first())
+                reusableRoutePath.moveTo(first.x, first.y)
+                for (i in 1 until routePoints.size) {
+                    val pt = toScreen(routePoints[i])
+                    reusableRoutePath.lineTo(pt.x, pt.y)
                 }
 
                 // Glow halo
                 drawPath(
-                    path = routePath,
+                    path = reusableRoutePath,
                     color = routeAccent.copy(alpha = 0.28f),
-                    style = Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    style = haloStroke
                 )
                 // Crisp white casing
                 drawPath(
-                    path = routePath,
+                    path = reusableRoutePath,
                     color = Color.White.copy(alpha = 0.96f),
-                    style = Stroke(width = 10f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    style = casingStroke
                 )
                 // Primary track stroke
                 drawPath(
-                    path = routePath,
+                    path = reusableRoutePath,
                     color = routeAccent,
-                    style = Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    style = coreStroke
                 )
             }
 
@@ -317,14 +325,13 @@ fun RecordedRideTopoMap(
 
             if (isFullScreen || zoom >= 12.5f) {
                 val badges = buildList {
-                    add("START" to startPt)
+                    add(startBadgeLayout to startPt)
                     if (routePoints.size >= 2) {
-                        add("FINISH" to endPt)
+                        add(finishBadgeLayout to endPt)
                     }
                 }
-                badges.forEach { (label, pt) ->
+                badges.forEach { (measured, pt) ->
                     if (pt.x in -20f..(w + 20f) && pt.y in -20f..(h + 20f)) {
-                        val measured = textMeasurer.measure(text = label, style = endpointLabelStyle)
                         val padH = 6f
                         val padV = 3f
                         val tl = Offset(
