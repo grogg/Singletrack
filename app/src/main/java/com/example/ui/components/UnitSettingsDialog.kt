@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -89,6 +90,7 @@ fun UnitSettingsDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 520.dp)
+                .safeDrawingPadding()
                 .testTag("unit_settings_dialog")
         ) {
             Column(
@@ -113,7 +115,7 @@ fun UnitSettingsDialog(
                 Column(
                     modifier = Modifier
                         .weight(weight = 1f, fill = false)
-                        .heightIn(max = 480.dp)
+                        .heightIn(max = 600.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {

@@ -6,7 +6,9 @@ import com.example.data.bluetooth.HrMeasurementParser
 import com.example.data.export.GpxExporter
 import com.example.data.local.GeometrySerializer
 import com.example.data.repository.GeoUtils
+import com.example.data.repository.MapCameraState
 import com.example.data.repository.SampledRoutePoint
+import com.example.data.repository.WebMercatorUtils
 import com.example.data.remote.OverpassCenter
 import com.example.data.remote.OverpassElement
 import com.example.domain.model.ElevationPoint
@@ -331,5 +333,50 @@ class GeoUtilsAndSerializerTest {
         assertEquals("+305 m", FormatUtils.formatElevation(1000, MeasurementUnit.METRIC, prefix = "+"))
         assertEquals("20 mi", FormatUtils.formatRadiusShort(20.0, MeasurementUnit.IMPERIAL))
         assertEquals("32 km", FormatUtils.formatRadiusShort(20.0, MeasurementUnit.METRIC))
+    }
+
+    @Test
+    fun webMercatorUtils_roundTripsAndComputesVisibleTiles() {
+        val lat = 38.57331
+        val lon = -109.51944
+        val zoom = 12.0
+        val tx = WebMercatorUtils.lonToTileX(lon, zoom)
+        val ty = WebMercatorUtils.latToTileY(lat, zoom)
+
+        assertEquals(lon, WebMercatorUtils.tileXToLon(tx, zoom), 0.0001)
+        assertEquals(lat, WebMercatorUtils.tileYToLat(ty, zoom), 0.0001)
+
+        val visible = WebMercatorUtils.computeVisibleTiles(
+            centerLat = lat,
+            centerLon = lon,
+            zoom = 12.0f,
+            tileZoom = 12,
+            baseTilePx = 256f,
+            viewportWidth = 800f,
+            viewportHeight = 600f
+        )
+        assertTrue(visible.isNotEmpty())
+        assertTrue(visible.all { it.z == 12 && it.x in 0 until 4096 && it.y in 0 until 4096 })
+
+        val baseState = MapCameraState(centerLat = lat, centerLon = lon, zoom = 12.0f)
+        val zoomed = WebMercatorUtils.applyPinchPanZoom(
+            current = baseState,
+            viewportWidth = 800f,
+            viewportHeight = 600f,
+            centroidX = 400f,
+            centroidY = 300f,
+            panX = 0f,
+            panY = 0f,
+            gestureZoom = 2.0f,
+            baseTilePx = 256f
+        )
+        assertEquals(13.0f, zoomed.zoom, 0.001f)
+        assertEquals(lat, zoomed.centerLat, 0.001)
+        assertEquals(lon, zoomed.centerLon, 0.001)
+
+        val projectedCenterX = WebMercatorUtils.projectX(lon, zoom, tx, 800f, 256f)
+        val projectedCenterY = WebMercatorUtils.projectY(lat, zoom, ty, 600f, 256f)
+        assertEquals(400f, projectedCenterX, 0.01f)
+        assertEquals(300f, projectedCenterY, 0.01f)
     }
 }

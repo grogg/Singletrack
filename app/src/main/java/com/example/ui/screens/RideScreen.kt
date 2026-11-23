@@ -48,10 +48,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
@@ -92,17 +94,25 @@ fun RideScreen(
     onShareRideGpx: (RecordedRide) -> Unit,
     onSyncRide: (RecordedRide) -> Unit,
     onDeleteRide: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp
 ) {
     val context = LocalContext.current
-    val hasGoogleFitInstalled = context.packageManager
-        .getLaunchIntentForPackage("com.google.android.apps.fitness") != null
+    val hasGoogleFitInstalled = remember(context) {
+        context.packageManager.getLaunchIntentForPackage("com.google.android.apps.fitness") != null
+    }
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .testTag("ride_screen_list"),
-        contentPadding = PaddingValues(20.dp),
+        contentPadding = PaddingValues(
+            start = 20.dp,
+            end = 20.dp,
+            top = 20.dp + topInset,
+            bottom = 20.dp + bottomInset
+        ),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item(key = "header") {

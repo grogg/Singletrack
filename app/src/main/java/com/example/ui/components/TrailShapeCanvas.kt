@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -108,16 +109,7 @@ fun TrailShapeCanvas(
     ) {
         if (shapeData.totalPoints < 2) {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val cols = 6
-                val rows = 4
-                for (i in 1 until cols) {
-                    val x = size.width * i / cols
-                    drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-                }
-                for (j in 1 until rows) {
-                    val y = size.height * j / rows
-                    drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-                }
+                drawTopoGrid(gridColor)
             }
             Text(
                 text = emptyText,
@@ -129,16 +121,7 @@ fun TrailShapeCanvas(
             )
         } else {
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val cols = 6
-                val rows = 4
-                for (i in 1 until cols) {
-                    val x = size.width * i / cols
-                    drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
-                }
-                for (j in 1 until rows) {
-                    val y = size.height * j / rows
-                    drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-                }
+                drawTopoGrid(gridColor)
 
                 val latSpan = (shapeData.maxLat - shapeData.minLat).coerceAtLeast(0.0005)
                 val lonSpan = (shapeData.maxLon - shapeData.minLon).coerceAtLeast(0.0005)
@@ -202,5 +185,18 @@ fun TrailShapeCanvas(
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             )
         }
+    }
+}
+
+private fun DrawScope.drawTopoGrid(gridColor: Color) {
+    val cols = 6
+    val rows = 4
+    for (i in 1 until cols) {
+        val x = size.width * i / cols
+        drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1f)
+    }
+    for (j in 1 until rows) {
+        val y = size.height * j / rows
+        drawLine(gridColor, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
     }
 }

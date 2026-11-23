@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +57,8 @@ fun DifficultySymbol(
     symbolSize: Dp = 14.dp
 ) {
     val color = difficultyAccentColor(difficulty)
+    val primaryPath = remember { Path() }
+    val secondaryPath = remember { Path() }
     Canvas(
         modifier = modifier
             .size(symbolSize)
@@ -77,32 +80,31 @@ fun DifficultySymbol(
                 )
             }
             TrailDifficulty.ADVANCED -> {
-                val path = Path().apply {
-                    moveTo(w / 2f, h * 0.06f)
-                    lineTo(w * 0.94f, h / 2f)
-                    lineTo(w / 2f, h * 0.94f)
-                    lineTo(w * 0.06f, h / 2f)
-                    close()
-                }
-                drawPath(path, color = color)
+                primaryPath.reset()
+                primaryPath.moveTo(w / 2f, h * 0.06f)
+                primaryPath.lineTo(w * 0.94f, h / 2f)
+                primaryPath.lineTo(w / 2f, h * 0.94f)
+                primaryPath.lineTo(w * 0.06f, h / 2f)
+                primaryPath.close()
+                drawPath(primaryPath, color = color)
             }
             TrailDifficulty.EXPERT -> {
-                val left = Path().apply {
-                    moveTo(w * 0.30f, h * 0.14f)
-                    lineTo(w * 0.54f, h / 2f)
-                    lineTo(w * 0.30f, h * 0.86f)
-                    lineTo(w * 0.06f, h / 2f)
-                    close()
-                }
-                val right = Path().apply {
-                    moveTo(w * 0.70f, h * 0.14f)
-                    lineTo(w * 0.94f, h / 2f)
-                    lineTo(w * 0.70f, h * 0.86f)
-                    lineTo(w * 0.46f, h / 2f)
-                    close()
-                }
-                drawPath(left, color = color)
-                drawPath(right, color = color)
+                primaryPath.reset()
+                primaryPath.moveTo(w * 0.30f, h * 0.14f)
+                primaryPath.lineTo(w * 0.54f, h / 2f)
+                primaryPath.lineTo(w * 0.30f, h * 0.86f)
+                primaryPath.lineTo(w * 0.06f, h / 2f)
+                primaryPath.close()
+
+                secondaryPath.reset()
+                secondaryPath.moveTo(w * 0.70f, h * 0.14f)
+                secondaryPath.lineTo(w * 0.94f, h / 2f)
+                secondaryPath.lineTo(w * 0.70f, h * 0.86f)
+                secondaryPath.lineTo(w * 0.46f, h / 2f)
+                secondaryPath.close()
+
+                drawPath(primaryPath, color = color)
+                drawPath(secondaryPath, color = color)
             }
             TrailDifficulty.UNRATED -> {
                 drawCircle(color = color.copy(alpha = 0.25f), radius = w * 0.44f)
@@ -144,8 +146,23 @@ object FormatUtils {
         NumberFormat.getIntegerInstance(Locale.US)
     }
 
-    private val timestampFormatter: DateTimeFormatter =
-        DateTimeFormatter.ofPattern("MMM d, yyyy • h:mm a", Locale.getDefault())
+    @Volatile
+    private var cachedLocale: Locale? = null
+
+    @Volatile
+    private var cachedTimestampFormatter: DateTimeFormatter? = null
+
+    private fun timestampFormatter(): DateTimeFormatter {
+        val current = Locale.getDefault()
+        val existing = cachedTimestampFormatter
+        if (existing != null && cachedLocale == current) {
+            return existing
+        }
+        return DateTimeFormatter.ofPattern("MMM d, yyyy • h:mm a", current).also {
+            cachedLocale = current
+            cachedTimestampFormatter = it
+        }
+    }
 
     fun distanceValue(miles: Double, unit: MeasurementUnit): Double {
         return when (unit) {
@@ -243,6 +260,6 @@ object FormatUtils {
     fun formatTimestamp(millis: Long): String {
         return Instant.ofEpochMilli(millis)
             .atZone(ZoneId.systemDefault())
-            .format(timestampFormatter)
+            .format(timestampFormatter())
     }
 }

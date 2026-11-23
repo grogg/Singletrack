@@ -12,8 +12,8 @@ android {
     applicationId = "com.aistudio.singletrack.mxbkqr"
     minSdk = 26
     targetSdk = 36
-    versionCode = 11
-    versionName = "11.0"
+    versionCode = 12
+    versionName = "12.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -87,6 +87,8 @@ dependencies {
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation(libs.coil.compose)
+  implementation(libs.coil.network.okhttp)
   implementation(libs.converter.moshi)
   implementation(libs.kotlinx.coroutines.android)
   // implementation(libs.kotlinx.coroutines.core) // Provided transitively by kotlinx-coroutines-android

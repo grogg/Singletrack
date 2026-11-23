@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -8,12 +9,18 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
@@ -39,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,8 +54,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -56,6 +67,7 @@ import com.example.data.export.GpxExporter
 import com.example.data.health.HealthConnectSyncManager
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
+import com.example.domain.model.Trail
 import com.example.ui.components.FormatUtils
 import com.example.ui.components.LocationPickerSheet
 import com.example.ui.components.RecordedRideTopoMap
@@ -226,12 +238,38 @@ fun SingletrackApp(
             state.currentDestination == AppDestination.RIDE &&
             state.selectedRide != null
 
+        val isDark = isSystemInDarkTheme()
+        val view = LocalView.current
+        val hasDarkTopHeader = state.isRecordingScreenOpen || (
+            !state.isFullScreenMap &&
+                !state.isFullScreenRideMap &&
+                !showCompactTrailDetail &&
+                !showCompactRideDetail &&
+                state.currentDestination == AppDestination.EXPLORE &&
+                !(isExpanded && state.selectedTrail != null)
+            )
+
+        SideEffect {
+            if (!view.isInEditMode) {
+                val window = (view.context as? Activity)?.window
+                if (window != null) {
+                    val controller = WindowCompat.getInsetsController(window, view)
+                    controller.isAppearanceLightStatusBars = !isDark && !hasDarkTopHeader
+                    controller.isAppearanceLightNavigationBars = !isDark
+                }
+            }
+        }
+
         Scaffold(
             contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
             bottomBar = {
                 if (!isTabletOrWide && !showCompactTrailDetail && !showCompactRideDetail) {
-                    NavigationBar {
+                    NavigationBar(
+                        windowInsets = WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+                        )
+                    ) {
                         AppDestination.entries.forEach { dest ->
                             val selected = state.currentDestination == dest
                             NavigationBarItem(
@@ -253,13 +291,21 @@ fun SingletrackApp(
                 }
             }
         ) { innerPadding ->
+            val layoutDirection = LocalLayoutDirection.current
+            val topInset = innerPadding.calculateTopPadding()
+            val bottomInset = innerPadding.calculateBottomPadding()
+            val startInset = innerPadding.calculateStartPadding(layoutDirection)
+            val endInset = innerPadding.calculateEndPadding(layoutDirection)
+
             Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
+                modifier = Modifier.fillMaxSize()
             ) {
                 if (isTabletOrWide) {
-                    NavigationRail {
+                    NavigationRail(
+                        windowInsets = WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Vertical + WindowInsetsSides.Start
+                        )
+                    ) {
                         AppDestination.entries.forEach { dest ->
                             val selected = state.currentDestination == dest
                             NavigationRailItem(
@@ -284,7 +330,12 @@ fun SingletrackApp(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxHeight(),
+                        .fillMaxHeight()
+                        .padding(
+                            start = if (isTabletOrWide) 0.dp else startInset,
+                            end = endInset
+                        )
+                        .consumeWindowInsets(innerPadding),
                     contentAlignment = Alignment.TopCenter
                 ) {
                     when {
@@ -298,7 +349,9 @@ fun SingletrackApp(
                                 onBack = viewModel::closeTrailDetail,
                                 onOpenSettings = { showSettingsDialog = true },
                                 onRecordRideOnTrail = viewModel::startRideForTrail,
-                                onExpandOnTopoMap = { trail -> viewModel.openFullScreenMap(focusTrail = trail) }
+                                onExpandOnTopoMap = { trail -> viewModel.openFullScreenMap(focusTrail = trail) },
+                                topInset = topInset,
+                                bottomInset = bottomInset
                             )
                         }
 
@@ -323,13 +376,19 @@ fun SingletrackApp(
                                         )
                                     }
                                 },
-                                onDeleteRide = viewModel::deleteRide
+                                onDeleteRide = viewModel::deleteRide,
+                                topInset = topInset,
+                                bottomInset = bottomInset
                             )
                         }
 
                         state.currentDestination == AppDestination.EXPLORE -> {
                             if (isExpanded && state.selectedTrail != null) {
-                                Row(modifier = Modifier.fillMaxSize()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(top = topInset)
+                                ) {
                                     ExploreScreen(
                                         state = state,
                                         onRequestLocationPermission = requestLocationPermission,
@@ -345,7 +404,9 @@ fun SingletrackApp(
                                         onSelectViewMode = viewModel::setViewMode,
                                         onOpenTrailDetail = viewModel::openTrailDetail,
                                         onExpandFullScreenMap = { viewModel.openFullScreenMap() },
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f),
+                                        topInset = 0.dp,
+                                        bottomInset = bottomInset
                                     )
                                     VerticalDivider()
                                     TrailDetailScreen(
@@ -358,7 +419,9 @@ fun SingletrackApp(
                                         onOpenSettings = { showSettingsDialog = true },
                                         onRecordRideOnTrail = viewModel::startRideForTrail,
                                         onExpandOnTopoMap = { trail -> viewModel.openFullScreenMap(focusTrail = trail) },
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f),
+                                        topInset = 0.dp,
+                                        bottomInset = bottomInset
                                     )
                                 }
                             } else {
@@ -377,7 +440,9 @@ fun SingletrackApp(
                                     onSelectViewMode = viewModel::setViewMode,
                                     onOpenTrailDetail = viewModel::openTrailDetail,
                                     onExpandFullScreenMap = { viewModel.openFullScreenMap() },
-                                    modifier = Modifier.widthIn(max = 760.dp)
+                                    modifier = Modifier.widthIn(max = 760.dp),
+                                    topInset = topInset,
+                                    bottomInset = bottomInset
                                 )
                             }
                         }
@@ -407,7 +472,9 @@ fun SingletrackApp(
                                     )
                                 },
                                 onDeleteRegion = viewModel::deleteOfflineRegion,
-                                modifier = Modifier.widthIn(max = 760.dp)
+                                modifier = Modifier.widthIn(max = 760.dp),
+                                topInset = topInset,
+                                bottomInset = bottomInset
                             )
                         }
 
@@ -460,7 +527,9 @@ fun SingletrackApp(
                                         onShareRideGpx = shareRideGpx,
                                         onSyncRide = viewModel::syncRideToHealthConnect,
                                         onDeleteRide = viewModel::deleteRide,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f),
+                                        topInset = topInset,
+                                        bottomInset = bottomInset
                                     )
                                     VerticalDivider()
                                     RideDetailScreen(
@@ -484,7 +553,9 @@ fun SingletrackApp(
                                             }
                                         },
                                         onDeleteRide = viewModel::deleteRide,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f),
+                                        topInset = topInset,
+                                        bottomInset = bottomInset
                                     )
                                 }
                             } else {
@@ -534,7 +605,9 @@ fun SingletrackApp(
                                     onShareRideGpx = shareRideGpx,
                                     onSyncRide = viewModel::syncRideToHealthConnect,
                                     onDeleteRide = viewModel::deleteRide,
-                                    modifier = Modifier.widthIn(max = 760.dp)
+                                    modifier = Modifier.widthIn(max = 760.dp),
+                                    topInset = topInset,
+                                    bottomInset = bottomInset
                                 )
                             }
                         }

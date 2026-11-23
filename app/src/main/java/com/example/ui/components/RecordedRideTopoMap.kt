@@ -60,6 +60,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.remote.TopoTileLoader
 import com.example.data.repository.GeoUtils
+import com.example.data.repository.MapCameraState
+import com.example.data.repository.WebMercatorUtils
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
@@ -67,18 +69,9 @@ import com.example.ui.theme.DifficultyEasyColor
 import com.example.ui.theme.Terracotta
 import com.example.ui.theme.TerracottaBright
 import kotlinx.coroutines.launch
-import kotlin.math.PI
-import kotlin.math.atan
 import kotlin.math.ceil
-import kotlin.math.cos
-import kotlin.math.floor
-import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import kotlin.math.sinh
-import kotlin.math.tan
-
-private data class RideTileSpec(val z: Int, val x: Int, val y: Int)
 
 @Composable
 fun RecordedRideTopoMap(
@@ -125,7 +118,7 @@ fun RecordedRideTopoMap(
         if (canvasSize.width == 0 || canvasSize.height == 0 || routePoints.isEmpty()) {
             emptyList()
         } else {
-            computeVisibleRideTiles(
+            WebMercatorUtils.computeVisibleTiles(
                 centerLat = centerLat,
                 centerLon = centerLon,
                 zoom = zoom,
@@ -195,39 +188,24 @@ fun RecordedRideTopoMap(
                 .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, pan, gestureZoom, _ ->
-                        val w = size.width.toFloat()
-                        val h = size.height.toFloat()
-
-                        val oldZoom = zoom
-                        val zoomDelta = (ln(gestureZoom.toDouble().coerceAtLeast(0.1)) / ln(2.0)).toFloat()
-                        val newZoom = (oldZoom + zoomDelta).coerceIn(8.5f, 17.5f)
-
-                        val dxFromCenter = centroid.x - w / 2f
-                        val dyFromCenter = centroid.y - h / 2f
-
-                        val oldCenterX = rideLonToTileX(centerLon, oldZoom.toDouble())
-                        val oldCenterY = rideLatToTileY(centerLat, oldZoom.toDouble())
-
-                        val focalTileXAtOld = oldCenterX + (dxFromCenter / baseTilePx)
-                        val focalTileYAtOld = oldCenterY + (dyFromCenter / baseTilePx)
-                        val focalLon = rideTileXToLon(focalTileXAtOld, oldZoom.toDouble())
-                        val focalLat = rideTileYToLat(focalTileYAtOld, oldZoom.toDouble())
-
-                        zoom = newZoom
-
-                        val focalTileXAtNew = rideLonToTileX(focalLon, newZoom.toDouble())
-                        val focalTileYAtNew = rideLatToTileY(focalLat, newZoom.toDouble())
-
-                        val nextCenterX = focalTileXAtNew - ((dxFromCenter + pan.x) / baseTilePx)
-                        val nextCenterY = focalTileYAtNew - ((dyFromCenter + pan.y) / baseTilePx)
-
-                        centerLon = rideTileXToLon(nextCenterX, newZoom.toDouble())
-                        centerLat = rideTileYToLat(nextCenterY, newZoom.toDouble())
+                        val updated = WebMercatorUtils.applyPinchPanZoom(
+                            current = MapCameraState(centerLat, centerLon, zoom),
+                            viewportWidth = size.width.toFloat(),
+                            viewportHeight = size.height.toFloat(),
+                            centroidX = centroid.x,
+                            centroidY = centroid.y,
+                            panX = pan.x,
+                            panY = pan.y,
+                            gestureZoom = gestureZoom,
+                            baseTilePx = baseTilePx
+                        )
+                        centerLat = updated.centerLat
+                        centerLon = updated.centerLon
+                        zoom = updated.zoom
                     }
                 }
         ) {
-            @Suppress("UNUSED_EXPRESSION")
-            tileTick
+            if (tileTick < 0) return@Canvas
 
             val w = size.width
             val h = size.height
@@ -248,8 +226,8 @@ fun RecordedRideTopoMap(
             // 1. Topographic Map Tiles
             val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
             val renderedTilePx = baseTilePx * scaleFactor
-            val cTileXInt = rideLonToTileX(centerLon, tileZoom.toDouble())
-            val cTileYInt = rideLatToTileY(centerLat, tileZoom.toDouble())
+            val cTileXInt = WebMercatorUtils.lonToTileX(centerLon, tileZoom.toDouble())
+            val cTileYInt = WebMercatorUtils.latToTileY(centerLat, tileZoom.toDouble())
 
             for (spec in visibleTiles) {
                 val bitmap = tileLoader.getCachedTile(spec.z, spec.x, spec.y) ?: continue
@@ -273,11 +251,11 @@ fun RecordedRideTopoMap(
                 drawRect(color = Color.Black.copy(alpha = 0.20f))
             }
 
-            val cTileX = rideLonToTileX(centerLon, zoom.toDouble())
-            val cTileY = rideLatToTileY(centerLat, zoom.toDouble())
+            val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
+            val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
             fun toScreen(pt: GeoPoint): Offset {
-                val px = w / 2f + ((rideLonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
-                val py = h / 2f + ((rideLatToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
+                val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
+                val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
                 return Offset(px, py)
             }
 
@@ -495,58 +473,4 @@ private fun computeInitialCamera(points: List<GeoPoint>): RideMapCamera {
         else -> 10.0f
     }
     return RideMapCamera(cLat, cLon, zoom)
-}
-
-private fun computeVisibleRideTiles(
-    centerLat: Double,
-    centerLon: Double,
-    zoom: Float,
-    tileZoom: Int,
-    baseTilePx: Float,
-    viewportWidth: Float,
-    viewportHeight: Float
-): List<RideTileSpec> {
-    val nInt = 1 shl tileZoom
-    val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
-    val renderedTilePx = baseTilePx * scaleFactor
-
-    val cTileX = rideLonToTileX(centerLon, tileZoom.toDouble())
-    val cTileY = rideLatToTileY(centerLat, tileZoom.toDouble())
-
-    val halfTilesW = (viewportWidth / 2f) / renderedTilePx + 1.0
-    val halfTilesH = (viewportHeight / 2f) / renderedTilePx + 1.0
-
-    val minX = floor(cTileX - halfTilesW).toInt()
-    val maxX = ceil(cTileX + halfTilesW).toInt()
-    val minY = floor(cTileY - halfTilesH).toInt().coerceAtLeast(0)
-    val maxY = ceil(cTileY + halfTilesH).toInt().coerceAtMost(nInt - 1)
-
-    val specs = mutableListOf<RideTileSpec>()
-    for (y in minY..maxY) {
-        for (x in minX..maxX) {
-            val wrappedX = ((x % nInt) + nInt) % nInt
-            specs.add(RideTileSpec(tileZoom, wrappedX, y))
-        }
-    }
-    return specs
-}
-
-private fun rideLonToTileX(lon: Double, zoom: Double): Double {
-    return (lon + 180.0) / 360.0 * 2.0.pow(zoom)
-}
-
-private fun rideLatToTileY(lat: Double, zoom: Double): Double {
-    val clamped = lat.coerceIn(-85.05112878, 85.05112878)
-    val latRad = Math.toRadians(clamped)
-    return (1.0 - ln(tan(latRad) + 1.0 / cos(latRad)) / PI) / 2.0 * 2.0.pow(zoom)
-}
-
-private fun rideTileXToLon(tileX: Double, zoom: Double): Double {
-    val lon = tileX / 2.0.pow(zoom) * 360.0 - 180.0
-    return ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
-}
-
-private fun rideTileYToLat(tileY: Double, zoom: Double): Double {
-    val n = PI - 2.0 * PI * tileY / 2.0.pow(zoom)
-    return Math.toDegrees(atan(sinh(n))).coerceIn(-85.0, 85.0)
 }

@@ -108,25 +108,29 @@ class HealthConnectSyncManager(private val context: Context) {
             val endOffset = zoneRules.getOffset(endInstant)
 
             val canWriteRoute = granted.contains(HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE)
-            val exerciseRoute = if (canWriteRoute && ride.samples.size >= 2) {
-                val sortedSamples = ride.samples
+            val canWriteSpeed = granted.contains(HealthPermission.getWritePermission(SpeedRecord::class))
+            val canWriteHeartRate = granted.contains(HealthPermission.getWritePermission(HeartRateRecord::class))
+
+            val orderedSamples = if ((canWriteRoute || canWriteSpeed || canWriteHeartRate) && ride.samples.isNotEmpty()) {
+                ride.samples
                     .filter { it.timestampMillis in ride.startTimeMillis..ride.endTimeMillis }
                     .distinctBy { it.timestampMillis }
                     .sortedBy { it.timestampMillis }
-                if (sortedSamples.size >= 2) {
-                    ExerciseRoute(
-                        route = sortedSamples.map { sample ->
-                            ExerciseRoute.Location(
-                                time = Instant.ofEpochMilli(sample.timestampMillis),
-                                latitude = sample.lat,
-                                longitude = sample.lon,
-                                altitude = sample.altitudeMeters?.let { Length.meters(it) }
-                            )
-                        }
-                    )
-                } else {
-                    null
-                }
+            } else {
+                emptyList()
+            }
+
+            val exerciseRoute = if (canWriteRoute && orderedSamples.size >= 2) {
+                ExerciseRoute(
+                    route = orderedSamples.map { sample ->
+                        ExerciseRoute.Location(
+                            time = Instant.ofEpochMilli(sample.timestampMillis),
+                            latitude = sample.lat,
+                            longitude = sample.lon,
+                            altitude = sample.altitudeMeters?.let { Length.meters(it) }
+                        )
+                    }
+                )
             } else {
                 null
             }
@@ -187,63 +191,55 @@ class HealthConnectSyncManager(private val context: Context) {
                 )
             }
 
-            val canWriteSpeed = granted.contains(
-                HealthPermission.getWritePermission(SpeedRecord::class)
-            )
-            val speedSamples = ride.samples
-                .filter { it.speedMps != null && it.speedMps >= 0f && it.timestampMillis in ride.startTimeMillis..ride.endTimeMillis }
-                .distinctBy { it.timestampMillis }
-                .sortedBy { it.timestampMillis }
-            if (canWriteSpeed && speedSamples.isNotEmpty()) {
-                recordsToInsert.add(
-                    SpeedRecord(
-                        startTime = startInstant,
-                        startZoneOffset = startOffset,
-                        endTime = endInstant,
-                        endZoneOffset = endOffset,
-                        samples = speedSamples.map { sample ->
-                            SpeedRecord.Sample(
-                                time = Instant.ofEpochMilli(sample.timestampMillis),
-                                speed = Velocity.metersPerSecond((sample.speedMps ?: 0f).toDouble())
+            if (canWriteSpeed) {
+                val speedSamples = orderedSamples.filter { it.speedMps != null && it.speedMps >= 0f }
+                if (speedSamples.isNotEmpty()) {
+                    recordsToInsert.add(
+                        SpeedRecord(
+                            startTime = startInstant,
+                            startZoneOffset = startOffset,
+                            endTime = endInstant,
+                            endZoneOffset = endOffset,
+                            samples = speedSamples.map { sample ->
+                                SpeedRecord.Sample(
+                                    time = Instant.ofEpochMilli(sample.timestampMillis),
+                                    speed = Velocity.metersPerSecond((sample.speedMps ?: 0f).toDouble())
+                                )
+                            },
+                            metadata = Metadata.activelyRecorded(
+                                device = Device(type = Device.TYPE_PHONE),
+                                clientRecordId = "singletrack_speed_${ride.id}"
                             )
-                        },
-                        metadata = Metadata.activelyRecorded(
-                            device = Device(type = Device.TYPE_PHONE),
-                            clientRecordId = "singletrack_speed_${ride.id}"
                         )
                     )
-                )
+                }
             }
 
-            val canWriteHeartRate = granted.contains(
-                HealthPermission.getWritePermission(HeartRateRecord::class)
-            )
-            val hrSamples = ride.samples
-                .filter {
+            if (canWriteHeartRate) {
+                val hrSamples = orderedSamples.filter {
                     val hr = it.heartRateBpm
-                    hr != null && hr > 0 && it.timestampMillis in ride.startTimeMillis..ride.endTimeMillis
+                    hr != null && hr > 0
                 }
-                .distinctBy { it.timestampMillis }
-                .sortedBy { it.timestampMillis }
-            if (canWriteHeartRate && hrSamples.isNotEmpty()) {
-                recordsToInsert.add(
-                    HeartRateRecord(
-                        startTime = startInstant,
-                        startZoneOffset = startOffset,
-                        endTime = endInstant,
-                        endZoneOffset = endOffset,
-                        samples = hrSamples.map { sample ->
-                            HeartRateRecord.Sample(
-                                time = Instant.ofEpochMilli(sample.timestampMillis),
-                                beatsPerMinute = (sample.heartRateBpm ?: 0).toLong()
+                if (hrSamples.isNotEmpty()) {
+                    recordsToInsert.add(
+                        HeartRateRecord(
+                            startTime = startInstant,
+                            startZoneOffset = startOffset,
+                            endTime = endInstant,
+                            endZoneOffset = endOffset,
+                            samples = hrSamples.map { sample ->
+                                HeartRateRecord.Sample(
+                                    time = Instant.ofEpochMilli(sample.timestampMillis),
+                                    beatsPerMinute = (sample.heartRateBpm ?: 0).toLong()
+                                )
+                            },
+                            metadata = Metadata.activelyRecorded(
+                                device = Device(type = Device.TYPE_PHONE),
+                                clientRecordId = "singletrack_hr_${ride.id}"
                             )
-                        },
-                        metadata = Metadata.activelyRecorded(
-                            device = Device(type = Device.TYPE_PHONE),
-                            clientRecordId = "singletrack_hr_${ride.id}"
                         )
                     )
-                )
+                }
             }
 
             val response = client.insertRecords(recordsToInsert)

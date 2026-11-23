@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -37,14 +36,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.example.R
+import com.example.data.remote.SingletrackImageLoader
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
@@ -67,7 +70,9 @@ fun OfflineRegionsScreen(
     onOpenOfflineRegion: (OfflineRegion) -> Unit,
     onUpdateRegion: (OfflineRegion) -> Unit,
     onDeleteRegion: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp
 ) {
     val resolvedDefaultId = regions.firstOrNull { it.id == defaultOfflineRegionId }?.id
         ?: regions.firstOrNull()?.id
@@ -76,7 +81,12 @@ fun OfflineRegionsScreen(
         modifier = modifier
             .fillMaxSize()
             .testTag("offline_regions_list"),
-        contentPadding = PaddingValues(20.dp),
+        contentPadding = PaddingValues(
+            start = 20.dp,
+            end = 20.dp,
+            top = 20.dp + topInset,
+            bottom = 20.dp + bottomInset
+        ),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item(key = "header") {
@@ -214,8 +224,11 @@ fun OfflineRegionsScreen(
                         modifier = Modifier.padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.img_trail_compass),
+                        val context = LocalContext.current
+                        val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
+                        AsyncImage(
+                            model = R.drawable.img_trail_compass,
+                            imageLoader = imageLoader,
                             contentDescription = "No offline regions downloaded",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier

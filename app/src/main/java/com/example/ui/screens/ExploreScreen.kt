@@ -1,15 +1,16 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -66,12 +67,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.example.R
+import com.example.data.remote.SingletrackImageLoader
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
@@ -98,41 +102,48 @@ fun ExploreScreen(
     onSelectViewMode: (TrailViewMode) -> Unit,
     onOpenTrailDetail: (Trail) -> Unit,
     onExpandFullScreenMap: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp
 ) {
     val unit = state.measurementUnit
     var sortMenuExpanded by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Atmospheric Trail Hero Banner
+        // Atmospheric Trail Hero Banner bleeding behind status bar when topInset > 0
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(148.dp)
+                .height(IntrinsicSize.Min)
+                .defaultMinSize(minHeight = 144.dp + topInset)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.img_trail_hero),
+            val context = LocalContext.current
+            val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
+            AsyncImage(
+                model = R.drawable.img_trail_hero,
+                imageLoader = imageLoader,
                 contentDescription = "Mountain biking ridge banner",
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.matchParentSize()
             )
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                PineDeep.copy(alpha = 0.55f),
-                                PineDeep.copy(alpha = 0.88f)
+                                PineDeep.copy(alpha = 0.58f),
+                                PineDeep.copy(alpha = 0.90f)
                             )
                         )
                     )
             )
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .padding(top = topInset)
                     .padding(horizontal = 20.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -548,7 +559,7 @@ fun ExploreScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 16.dp)
-                        .padding(bottom = 12.dp)
+                        .padding(bottom = 12.dp + bottomInset)
                 )
             }
 
@@ -557,7 +568,12 @@ fun ExploreScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .testTag("trails_lazy_column"),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 4.dp,
+                        bottom = 16.dp + bottomInset
+                    ),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (state.usedSingletrackFallback) {
@@ -719,8 +735,11 @@ private fun LocationPermissionPromptCard(
             modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.img_trail_compass),
+            val context = LocalContext.current
+            val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
+            AsyncImage(
+                model = R.drawable.img_trail_compass,
+                imageLoader = imageLoader,
                 contentDescription = "Compass on topographic trail map",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -783,8 +802,11 @@ private fun EmptyTrailsCard(
                 modifier = Modifier.padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.img_trail_compass),
+                val context = LocalContext.current
+                val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
+                AsyncImage(
+                    model = R.drawable.img_trail_compass,
+                    imageLoader = imageLoader,
                     contentDescription = "Empty trail search compass",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

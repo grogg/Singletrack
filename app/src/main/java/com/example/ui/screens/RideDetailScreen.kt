@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -57,8 +58,10 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.MeasurementUnit
@@ -85,7 +88,9 @@ fun RideDetailScreen(
     onSaveGpxFile: (RecordedRide) -> Unit,
     onSyncHealthConnect: (RecordedRide) -> Unit,
     onDeleteRide: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp
 ) {
     if (showBackNavigation) {
         BackHandler(onBack = onBack)
@@ -104,12 +109,12 @@ fun RideDetailScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .testTag("ride_detail_screen")
     ) {
         if (showBackNavigation) {
             TopAppBar(
                 title = { Text("Ride Recording") },
+                windowInsets = WindowInsets(top = topInset),
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
@@ -146,8 +151,15 @@ fun RideDetailScreen(
 
         Column(
             modifier = Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = if (showBackNavigation) 12.dp else 12.dp + topInset,
+                    bottom = 24.dp + bottomInset
+                ),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Title, timestamp, trail & sensor pills
@@ -569,6 +581,18 @@ private fun RideTelemetryChartCard(
                 )
             }
 
+            val density = LocalDensity.current
+            val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
+            val strokePath = remember { Path() }
+            val fillPath = remember { Path() }
+            val lineStroke = remember(density) {
+                Stroke(
+                    width = with(density) { 2.4.dp.toPx() },
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -586,7 +610,6 @@ private fun RideTelemetryChartCard(
                     val maxVal = values.max()
                     val span = (maxVal - minVal).coerceAtLeast(10.0)
 
-                    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f)
                     for (step in 0..2) {
                         val y = padTop + chartH * (step / 2f)
                         drawLine(
@@ -607,22 +630,20 @@ private fun RideTelemetryChartCard(
                         )
                     }
 
-                    val strokePath = Path().apply {
-                        moveTo(coords.first().x, coords.first().y)
-                        for (i in 1 until coords.size) {
-                            val prev = coords[i - 1]
-                            val curr = coords[i]
-                            val midX = (prev.x + curr.x) / 2f
-                            cubicTo(midX, prev.y, midX, curr.y, curr.x, curr.y)
-                        }
+                    strokePath.reset()
+                    strokePath.moveTo(coords.first().x, coords.first().y)
+                    for (i in 1 until coords.size) {
+                        val prev = coords[i - 1]
+                        val curr = coords[i]
+                        val midX = (prev.x + curr.x) / 2f
+                        strokePath.cubicTo(midX, prev.y, midX, curr.y, curr.x, curr.y)
                     }
 
-                    val fillPath = Path().apply {
-                        addPath(strokePath)
-                        lineTo(coords.last().x, padTop + chartH)
-                        lineTo(coords.first().x, padTop + chartH)
-                        close()
-                    }
+                    fillPath.reset()
+                    fillPath.addPath(strokePath)
+                    fillPath.lineTo(coords.last().x, padTop + chartH)
+                    fillPath.lineTo(coords.first().x, padTop + chartH)
+                    fillPath.close()
 
                     drawPath(
                         path = fillPath,
@@ -639,11 +660,7 @@ private fun RideTelemetryChartCard(
                     drawPath(
                         path = strokePath,
                         color = lineColor,
-                        style = Stroke(
-                            width = 2.4.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
+                        style = lineStroke
                     )
                 }
             }

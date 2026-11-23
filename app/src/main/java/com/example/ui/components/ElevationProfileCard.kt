@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +36,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -298,6 +300,14 @@ private fun ElevationMetricItem(
     }
 }
 
+@Immutable
+private data class ElevationChartStats(
+    val totalMiles: Double,
+    val minVal: Double,
+    val span: Double,
+    val peakIndex: Int
+)
+
 @Composable
 private fun ElevationChartCanvas(
     points: List<ElevationPoint>,
@@ -306,6 +316,7 @@ private fun ElevationChartCanvas(
     measurementUnit: MeasurementUnit
 ) {
     val isDark = isSystemInDarkTheme()
+    val density = LocalDensity.current
     val lineColor = if (isDark) TerracottaBright else Terracotta
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val peakColor = MaterialTheme.colorScheme.primary
@@ -322,15 +333,27 @@ private fun ElevationChartCanvas(
                 peakIndex = i
             }
         }
-        Triple(totalMiles, minVal, Pair((maxVal - minVal).coerceAtLeast(25.0), peakIndex))
+        ElevationChartStats(
+            totalMiles = totalMiles,
+            minVal = minVal,
+            span = (maxVal - minVal).coerceAtLeast(25.0),
+            peakIndex = peakIndex
+        )
     }
-    val totalMiles = chartStats.first
-    val minVal = chartStats.second
-    val span = chartStats.third.first
-    val peakIndex = chartStats.third.second
+    val totalMiles = chartStats.totalMiles
+    val minVal = chartStats.minVal
+    val span = chartStats.span
+    val peakIndex = chartStats.peakIndex
     val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
     val strokePath = remember { Path() }
     val fillPath = remember { Path() }
+    val lineStroke = remember(density) {
+        Stroke(
+            width = with(density) { 2.6.dp.toPx() },
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -408,11 +431,7 @@ private fun ElevationChartCanvas(
                 drawPath(
                     path = strokePath,
                     color = lineColor,
-                    style = Stroke(
-                        width = 2.6.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
+                    style = lineStroke
                 )
 
                 if (peakIndex in points.indices) {

@@ -1,14 +1,13 @@
 package com.example.ui.screens
 
 import android.content.Intent
-import android.net.Uri
-import androidx.core.net.toUri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -45,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.domain.model.MeasurementUnit
@@ -52,6 +52,7 @@ import com.example.domain.model.Trail
 import com.example.ui.components.DifficultyBadge
 import com.example.ui.components.ElevationProfileCard
 import com.example.ui.components.FormatUtils
+import com.example.ui.components.TrailNavigationHelper
 import com.example.ui.components.TrailShapeCanvas
 import java.util.Locale
 
@@ -66,8 +67,10 @@ fun TrailDetailScreen(
     onBack: () -> Unit,
     onOpenSettings: () -> Unit,
     onRecordRideOnTrail: (Trail) -> Unit,
+    modifier: Modifier = Modifier,
     onExpandOnTopoMap: ((Trail) -> Unit)? = null,
-    modifier: Modifier = Modifier
+    topInset: Dp = 0.dp,
+    bottomInset: Dp = 0.dp
 ) {
     val context = LocalContext.current
 
@@ -76,13 +79,12 @@ fun TrailDetailScreen(
     }
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+        modifier = modifier.fillMaxSize()
     ) {
         if (showBackNavigation) {
             TopAppBar(
                 title = { Text("Trail Briefing") },
+                windowInsets = WindowInsets(top = topInset),
                 navigationIcon = {
                     IconButton(
                         onClick = onBack,
@@ -110,8 +112,15 @@ fun TrailDetailScreen(
 
         Column(
             modifier = Modifier
+                .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(
+                    start = 20.dp,
+                    end = 20.dp,
+                    top = if (showBackNavigation) 12.dp else 12.dp + topInset,
+                    bottom = 24.dp + bottomInset
+                ),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
@@ -258,19 +267,7 @@ fun TrailDetailScreen(
             ) {
                 FilledTonalButton(
                     onClick = {
-                        val label = Uri.encode(trail.name)
-                        val uri =
-                            "geo:${trail.centerLat},${trail.centerLon}?q=${trail.centerLat},${trail.centerLon}($label)"
-                                .toUri()
-                        val intent = Intent(Intent.ACTION_VIEW, uri)
-                        if (intent.resolveActivity(context.packageManager) != null) {
-                            context.startActivity(intent)
-                        } else {
-                            val webUri =
-                                "https://www.openstreetmap.org/?mlat=${trail.centerLat}&mlon=${trail.centerLon}#map=15/${trail.centerLat}/${trail.centerLon}"
-                                    .toUri()
-                            context.startActivity(Intent(Intent.ACTION_VIEW, webUri))
-                        }
+                        TrailNavigationHelper.openTrailDirections(context, trail)
                     },
                     modifier = Modifier
                         .weight(1f)
@@ -292,14 +289,7 @@ fun TrailDetailScreen(
                             (trail.elevationProfile?.elevationGainFeet ?: trail.elevationGainFeet)?.let { gain ->
                                 append("Elevation Gain: ${FormatUtils.formatElevation(gain, measurementUnit, prefix = "+")}\n")
                             }
-                            append(
-                                String.format(
-                                    Locale.US,
-                                    "Trailhead: https://maps.google.com/?q=%.5f,%.5f",
-                                    trail.centerLat,
-                                    trail.centerLon
-                                )
-                            )
+                            append("Directions: ${TrailNavigationHelper.buildShareDirectionsUrl(trail)}")
                         }
                         val sendIntent = Intent(Intent.ACTION_SEND).apply {
                             type = "text/plain"

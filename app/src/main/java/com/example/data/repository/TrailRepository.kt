@@ -19,8 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import java.util.Collections
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 
 data class TrailScanResult(
     val trails: List<Trail>,
@@ -32,7 +32,14 @@ data class TrailScanResult(
 class TrailRepository(
     private val offlineTrailDao: OfflineTrailDao
 ) {
-    private val elevationMemoryCache = ConcurrentHashMap<String, TrailElevationProfile>()
+    private val elevationMemoryCache: MutableMap<String, TrailElevationProfile> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, TrailElevationProfile>(64, 0.75f, true) {
+                override fun removeEldestEntry(
+                    eldest: MutableMap.MutableEntry<String, TrailElevationProfile>?
+                ): Boolean = size > MAX_ELEVATION_CACHE_ENTRIES
+            }
+        )
 
     fun observeOfflineRegions(): Flow<List<OfflineRegion>> {
         return offlineTrailDao.observeRegions().map { list ->
@@ -309,11 +316,16 @@ class TrailRepository(
 
     suspend fun findMatchingOfflineRegion(lat: Double, lon: Double): OfflineRegion? = withContext(Dispatchers.IO) {
         val regions = offlineTrailDao.getAllRegionsOnce()
-        regions.map { it to GeoUtils.haversineMiles(lat, lon, it.centerLat, it.centerLon) }
-            .filter { (_, distance) -> distance <= GeoUtils.RADIUS_TWENTY_MILES }
-            .minByOrNull { (_, distance) -> distance }
-            ?.first
-            ?.toDomain()
+        var closest: OfflineRegionEntity? = null
+        var closestDistance = Double.MAX_VALUE
+        for (region in regions) {
+            val distance = GeoUtils.haversineMiles(lat, lon, region.centerLat, region.centerLon)
+            if (distance <= GeoUtils.RADIUS_TWENTY_MILES && distance < closestDistance) {
+                closestDistance = distance
+                closest = region
+            }
+        }
+        closest?.toDomain()
     }
 
     suspend fun deleteOfflineRegion(regionId: String) = withContext(Dispatchers.IO) {
@@ -409,4 +421,8 @@ class TrailRepository(
         approxSizeBytes = approxSizeBytes,
         hasFullGeometry = hasFullGeometry
     )
+
+    private companion object {
+        const val MAX_ELEVATION_CACHE_ENTRIES = 150
+    }
 }

@@ -7,22 +7,25 @@ import android.net.Uri
 import androidx.core.content.FileProvider
 import com.example.domain.model.RecordedRide
 import java.io.File
-import java.text.SimpleDateFormat
 import java.time.Instant
-import java.util.Date
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object GpxExporter {
+    private val NON_ALPHANUM_REGEX = Regex("[^a-z0-9]+")
+    private val FILE_DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm", Locale.US)
 
     fun buildSuggestedFileName(ride: RecordedRide): String {
         val cleanTitle = ride.title
             .lowercase(Locale.US)
-            .replace(Regex("[^a-z0-9]+"), "_")
+            .replace(NON_ALPHANUM_REGEX, "_")
             .trim('_')
             .ifBlank { "singletrack_ride" }
             .take(40)
-        val sdf = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US)
-        val dateStamp = sdf.format(Date(ride.startTimeMillis))
+        val dateStamp = Instant.ofEpochMilli(ride.startTimeMillis)
+            .atZone(ZoneId.systemDefault())
+            .format(FILE_DATE_FORMATTER)
         return "${cleanTitle}_${dateStamp}.gpx"
     }
 

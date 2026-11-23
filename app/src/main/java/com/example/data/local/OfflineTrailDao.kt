@@ -15,14 +15,8 @@ interface OfflineTrailDao {
     @Query("SELECT * FROM offline_regions ORDER BY downloadedAtMillis DESC")
     suspend fun getAllRegionsOnce(): List<OfflineRegionEntity>
 
-    @Query("SELECT * FROM offline_regions WHERE id = :regionId LIMIT 1")
-    suspend fun getRegionById(regionId: String): OfflineRegionEntity?
-
     @Query("SELECT * FROM cached_trails WHERE regionId = :regionId")
     suspend fun getTrailsForRegion(regionId: String): List<CachedTrailEntity>
-
-    @Query("SELECT * FROM cached_trails WHERE regionId = :regionId")
-    fun observeTrailsForRegion(regionId: String): Flow<List<CachedTrailEntity>>
 
     @Query("SELECT * FROM cached_trails WHERE osmKey = :osmKey LIMIT 1")
     suspend fun findCachedTrailByKey(osmKey: String): CachedTrailEntity?

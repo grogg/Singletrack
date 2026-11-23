@@ -42,7 +42,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
-import java.util.Locale
 import java.util.UUID
 
 enum class BlePermissionAction {
@@ -312,15 +311,6 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     fun setMeasurementUnit(unit: MeasurementUnit) {
         prefs.edit { putString(KEY_MEASUREMENT_UNIT, unit.name) }
         _uiState.update { it.copy(measurementUnit = unit) }
-    }
-
-    fun toggleMeasurementUnit() {
-        val next = if (_uiState.value.measurementUnit == MeasurementUnit.IMPERIAL) {
-            MeasurementUnit.METRIC
-        } else {
-            MeasurementUnit.IMPERIAL
-        }
-        setMeasurementUnit(next)
     }
 
     private fun loadSavedUnit(): MeasurementUnit {
@@ -1274,7 +1264,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 compareBy<Trail> { it.difficulty.rank }.thenBy { it.distanceFromUserMiles }
             )
             TrailSortOrder.LENGTH -> filtered.sortedByDescending { it.lengthMiles ?: -1.0 }
-            TrailSortOrder.NAME -> filtered.sortedBy { it.name.lowercase(Locale.US) }
+            TrailSortOrder.NAME -> filtered.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
         }
     }
 

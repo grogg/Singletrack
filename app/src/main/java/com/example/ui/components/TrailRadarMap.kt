@@ -70,6 +70,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.remote.TopoTileLoader
 import com.example.data.repository.GeoUtils
+import com.example.data.repository.MapCameraState
+import com.example.data.repository.WebMercatorUtils
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
@@ -82,23 +84,15 @@ import com.example.ui.theme.DifficultyIntermediateColor
 import com.example.ui.theme.DifficultyUnratedColor
 import com.example.ui.theme.Terracotta
 import kotlinx.coroutines.launch
-import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.asin
-import kotlin.math.atan
 import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
-import kotlin.math.floor
 import kotlin.math.hypot
-import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sinh
-import kotlin.math.tan
-
-private data class VisibleTileSpec(val z: Int, val x: Int, val y: Int)
 
 @Composable
 fun TrailRadarMap(
@@ -158,7 +152,7 @@ fun TrailRadarMap(
         if (canvasSize.width == 0 || canvasSize.height == 0) {
             emptyList()
         } else {
-            computeVisibleTiles(
+            WebMercatorUtils.computeVisibleTiles(
                 centerLat = centerLat,
                 centerLon = centerLon,
                 zoom = zoom,
@@ -219,35 +213,20 @@ fun TrailRadarMap(
                 .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, pan, gestureZoom, _ ->
-                        val w = size.width.toFloat()
-                        val h = size.height.toFloat()
-
-                        val oldZoom = zoom
-                        val zoomDelta = (ln(gestureZoom.toDouble().coerceAtLeast(0.1)) / ln(2.0)).toFloat()
-                        val newZoom = (oldZoom + zoomDelta).coerceIn(8.5f, 17.5f)
-
-                        // Keep pinch centroid anchored when zooming
-                        val dxFromCenter = centroid.x - w / 2f
-                        val dyFromCenter = centroid.y - h / 2f
-
-                        val oldCenterX = lonToTileX(centerLon, oldZoom.toDouble())
-                        val oldCenterY = latToTileY(centerLat, oldZoom.toDouble())
-
-                        val focalTileXAtOld = oldCenterX + (dxFromCenter / baseTilePx)
-                        val focalTileYAtOld = oldCenterY + (dyFromCenter / baseTilePx)
-                        val focalLon = tileXToLon(focalTileXAtOld, oldZoom.toDouble())
-                        val focalLat = tileYToLat(focalTileYAtOld, oldZoom.toDouble())
-
-                        zoom = newZoom
-
-                        val focalTileXAtNew = lonToTileX(focalLon, newZoom.toDouble())
-                        val focalTileYAtNew = latToTileY(focalLat, newZoom.toDouble())
-
-                        val nextCenterX = focalTileXAtNew - ((dxFromCenter + pan.x) / baseTilePx)
-                        val nextCenterY = focalTileYAtNew - ((dyFromCenter + pan.y) / baseTilePx)
-
-                        centerLon = tileXToLon(nextCenterX, newZoom.toDouble())
-                        centerLat = tileYToLat(nextCenterY, newZoom.toDouble())
+                        val updated = WebMercatorUtils.applyPinchPanZoom(
+                            current = MapCameraState(centerLat, centerLon, zoom),
+                            viewportWidth = size.width.toFloat(),
+                            viewportHeight = size.height.toFloat(),
+                            centroidX = centroid.x,
+                            centroidY = centroid.y,
+                            panX = pan.x,
+                            panY = pan.y,
+                            gestureZoom = gestureZoom,
+                            baseTilePx = baseTilePx
+                        )
+                        centerLat = updated.centerLat
+                        centerLon = updated.centerLon
+                        zoom = updated.zoom
                     }
                 }
                 .pointerInput(Unit) {
@@ -255,12 +234,12 @@ fun TrailRadarMap(
                         val w = size.width.toFloat()
                         val h = size.height.toFloat()
                         val currentZoom = zoom.toDouble()
-                        val cTileX = lonToTileX(centerLon, currentZoom)
-                        val cTileY = latToTileY(centerLat, currentZoom)
+                        val cTileX = WebMercatorUtils.lonToTileX(centerLon, currentZoom)
+                        val cTileY = WebMercatorUtils.latToTileY(centerLat, currentZoom)
 
                         fun toScreen(pt: GeoPoint): Offset {
-                            val px = w / 2f + ((lonToTileX(pt.lon, currentZoom) - cTileX) * baseTilePx).toFloat()
-                            val py = h / 2f + ((latToTileY(pt.lat, currentZoom) - cTileY) * baseTilePx).toFloat()
+                            val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, currentZoom) - cTileX) * baseTilePx).toFloat()
+                            val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, currentZoom) - cTileY) * baseTilePx).toFloat()
                             return Offset(px, py)
                         }
 
@@ -302,8 +281,7 @@ fun TrailRadarMap(
                     }
                 }
         ) {
-            @Suppress("UNUSED_EXPRESSION")
-            tileTick
+            if (tileTick < 0) return@Canvas
 
             val w = size.width
             val h = size.height
@@ -324,8 +302,8 @@ fun TrailRadarMap(
             // 1. Draw Topographic Map Tiles
             val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
             val renderedTilePx = baseTilePx * scaleFactor
-            val cTileXInt = lonToTileX(centerLon, tileZoom.toDouble())
-            val cTileYInt = latToTileY(centerLat, tileZoom.toDouble())
+            val cTileXInt = WebMercatorUtils.lonToTileX(centerLon, tileZoom.toDouble())
+            val cTileYInt = WebMercatorUtils.latToTileY(centerLat, tileZoom.toDouble())
 
             for (spec in visibleTiles) {
                 val bitmap = tileLoader.getCachedTile(spec.z, spec.x, spec.y) ?: continue
@@ -349,11 +327,11 @@ fun TrailRadarMap(
                 drawRect(color = Color.Black.copy(alpha = 0.20f))
             }
 
-            val cTileX = lonToTileX(centerLon, zoom.toDouble())
-            val cTileY = latToTileY(centerLat, zoom.toDouble())
+            val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
+            val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
             fun toScreen(pt: GeoPoint): Offset {
-                val px = w / 2f + ((lonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
-                val py = h / 2f + ((latToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
+                val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
+                val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
                 return Offset(px, py)
             }
 
@@ -715,60 +693,6 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTrailOverlay(
         radius = if (isSelected) 8f else 5f,
         center = pinOffset
     )
-}
-
-private fun computeVisibleTiles(
-    centerLat: Double,
-    centerLon: Double,
-    zoom: Float,
-    tileZoom: Int,
-    baseTilePx: Float,
-    viewportWidth: Float,
-    viewportHeight: Float
-): List<VisibleTileSpec> {
-    val nInt = 1 shl tileZoom
-    val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
-    val renderedTilePx = baseTilePx * scaleFactor
-
-    val cTileX = lonToTileX(centerLon, tileZoom.toDouble())
-    val cTileY = latToTileY(centerLat, tileZoom.toDouble())
-
-    val halfTilesW = (viewportWidth / 2f) / renderedTilePx + 1.0
-    val halfTilesH = (viewportHeight / 2f) / renderedTilePx + 1.0
-
-    val minX = floor(cTileX - halfTilesW).toInt()
-    val maxX = ceil(cTileX + halfTilesW).toInt()
-    val minY = floor(cTileY - halfTilesH).toInt().coerceAtLeast(0)
-    val maxY = ceil(cTileY + halfTilesH).toInt().coerceAtMost(nInt - 1)
-
-    val specs = mutableListOf<VisibleTileSpec>()
-    for (y in minY..maxY) {
-        for (x in minX..maxX) {
-            val wrappedX = ((x % nInt) + nInt) % nInt
-            specs.add(VisibleTileSpec(tileZoom, wrappedX, y))
-        }
-    }
-    return specs
-}
-
-private fun lonToTileX(lon: Double, zoom: Double): Double {
-    return (lon + 180.0) / 360.0 * 2.0.pow(zoom)
-}
-
-private fun latToTileY(lat: Double, zoom: Double): Double {
-    val clamped = lat.coerceIn(-85.05112878, 85.05112878)
-    val latRad = Math.toRadians(clamped)
-    return (1.0 - ln(tan(latRad) + 1.0 / cos(latRad)) / PI) / 2.0 * 2.0.pow(zoom)
-}
-
-private fun tileXToLon(tileX: Double, zoom: Double): Double {
-    val lon = tileX / 2.0.pow(zoom) * 360.0 - 180.0
-    return ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
-}
-
-private fun tileYToLat(tileY: Double, zoom: Double): Double {
-    val n = PI - 2.0 * PI * tileY / 2.0.pow(zoom)
-    return Math.toDegrees(atan(sinh(n))).coerceIn(-85.0, 85.0)
 }
 
 private fun buildGeodesicCircle(
