@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.domain.model.GeoPoint
 import kotlin.math.PI
 import kotlin.math.atan
 import kotlin.math.ceil
@@ -129,5 +130,36 @@ object WebMercatorUtils {
             }
         }
         return specs
+    }
+
+    fun computeBoundingCamera(points: List<GeoPoint>): MapCameraState {
+        if (points.isEmpty()) return MapCameraState(39.0, -98.0, 12.0f)
+        if (points.size == 1) return MapCameraState(points.first().lat, points.first().lon, 15.0f)
+
+        var minLat = Double.POSITIVE_INFINITY
+        var maxLat = Double.NEGATIVE_INFINITY
+        var minLon = Double.POSITIVE_INFINITY
+        var maxLon = Double.NEGATIVE_INFINITY
+        for (pt in points) {
+            if (pt.lat < minLat) minLat = pt.lat
+            if (pt.lat > maxLat) maxLat = pt.lat
+            if (pt.lon < minLon) minLon = pt.lon
+            if (pt.lon > maxLon) maxLon = pt.lon
+        }
+
+        val cLat = (minLat + maxLat) / 2.0
+        val cLon = (minLon + maxLon) / 2.0
+        val spanMiles = GeoUtils.haversineMiles(minLat, minLon, maxLat, maxLon)
+
+        val zoom = when {
+            spanMiles < 0.25 -> 16.0f
+            spanMiles < 0.6 -> 15.0f
+            spanMiles < 1.5 -> 14.0f
+            spanMiles < 3.5 -> 13.0f
+            spanMiles < 8.0 -> 12.0f
+            spanMiles < 18.0 -> 11.0f
+            else -> 10.0f
+        }
+        return MapCameraState(cLat, cLon, zoom)
     }
 }

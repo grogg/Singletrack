@@ -24,8 +24,8 @@ interface OverpassService {
 object OverpassClient {
     val ENDPOINTS = listOf(
         "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+        "https://overpass.private.coffee/api/interpreter",
+        "https://overpass.osm.ch/api/interpreter"
     )
 
     private val moshi: Moshi by lazy {

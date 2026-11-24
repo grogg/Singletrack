@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Route
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terrain
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -64,6 +66,8 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.BleConnectionStatus
 import com.example.domain.model.BleSensorUiState
+import com.example.domain.model.GpxNavigationState
+import com.example.domain.model.GpxRouteStatus
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RideRecordingStatus
 import com.example.ui.components.FormatUtils
@@ -73,6 +77,7 @@ import com.example.ui.theme.PineDeep
 import com.example.ui.theme.PineForest
 import com.example.ui.theme.Terracotta
 import com.example.ui.theme.TerracottaBright
+import kotlin.math.roundToInt
 
 @Composable
 fun LiveRideCockpitScreen(
@@ -88,7 +93,8 @@ fun LiveRideCockpitScreen(
     onResumeRide: () -> Unit,
     onFinishRide: () -> Unit,
     onDiscardRide: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    gpxNavigation: GpxNavigationState = GpxNavigationState()
 ) {
     BackHandler(onBack = onClose)
 
@@ -329,6 +335,70 @@ fun LiveRideCockpitScreen(
                     .padding(horizontal = 16.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                val activeGpxTrack = gpxNavigation.track
+                if (gpxNavigation.isNavigating && activeGpxTrack != null) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (gpxNavigation.routeStatus == GpxRouteStatus.OFF_ROUTE) {
+                            MaterialTheme.colorScheme.errorContainer
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("cockpit_gpx_guidance_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (gpxNavigation.routeStatus == GpxRouteStatus.OFF_ROUTE) {
+                                    Icons.Filled.WarningAmber
+                                } else {
+                                    Icons.Filled.Navigation
+                                },
+                                contentDescription = null,
+                                tint = if (gpxNavigation.routeStatus == GpxRouteStatus.OFF_ROUTE) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                }
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = gpxNavigation.turnInstruction,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val offText = gpxNavigation.offRouteFeet?.let { ft ->
+                                    if (measurementUnit == MeasurementUnit.METRIC) {
+                                        "${(ft * FormatUtils.FEET_TO_METERS).roundToInt()} m off"
+                                    } else {
+                                        "${ft.roundToInt()} ft off"
+                                    }
+                                } ?: gpxNavigation.routeStatus.label
+                                Text(
+                                    text = "${activeGpxTrack.name} • Left ${
+                                        FormatUtils.formatDistance(
+                                            gpxNavigation.distanceRemainingMiles,
+                                            measurementUnit,
+                                            decimals = 2
+                                        )
+                                    } • $offText",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Row 1: Speed & Distance Traveled
                 Row(
                     modifier = Modifier.fillMaxWidth(),

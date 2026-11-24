@@ -681,16 +681,42 @@ class BleCyclingSensorManager(private val context: Context) {
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun resolveScanDeviceName(
+        result: ScanResult,
+        device: BluetoothDevice,
+        address: String,
+        fallbackPrefix: String
+    ): String {
+        val advertised = result.scanRecord?.deviceName
+        if (!advertised.isNullOrBlank()) return advertised
+        val deviceName = if (hasConnectPermission()) device.name else null
+        return deviceName?.takeIf { it.isNotBlank() } ?: "$fallbackPrefix (${address.takeLast(5)})"
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun enableCharacteristicNotifications(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic
+    ) {
+        if (!hasConnectPermission()) return
+        gatt.setCharacteristicNotification(characteristic, true)
+        val cccd = characteristic.getDescriptor(CCCD_UUID) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        } else {
+            @Suppress("DEPRECATION")
+            cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            @Suppress("DEPRECATION")
+            gatt.writeDescriptor(cccd)
+        }
+    }
+
     private val scanCallback = object : ScanCallback() {
-        @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device ?: return
             val address = device.address ?: return
-            val deviceName = if (hasConnectPermission()) {
-                result.scanRecord?.deviceName ?: device.name ?: "Cycling Sensor (${address.takeLast(5)})"
-            } else {
-                result.scanRecord?.deviceName ?: "Cycling Sensor (${address.takeLast(5)})"
-            }
+            val deviceName = resolveScanDeviceName(result, device, address, "Cycling Sensor")
             val candidate = DiscoveredBleSensor(
                 name = deviceName,
                 address = address,
@@ -778,18 +804,7 @@ class BleCyclingSensorManager(private val context: Context) {
             }
 
             if (!hasConnectPermission()) return
-            gatt.setCharacteristicNotification(cscChar, true)
-            val cccd = cscChar.getDescriptor(CCCD_UUID)
-            if (cccd != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    @Suppress("DEPRECATION")
-                    gatt.writeDescriptor(cccd)
-                }
-            }
+            enableCharacteristicNotifications(gatt, cscChar)
 
             val sensorName = _sensorState.value.pairedSensor?.name ?: "Cycling Sensor"
             _sensorState.update {
@@ -870,15 +885,10 @@ class BleCyclingSensorManager(private val context: Context) {
     }
 
     private val hrScanCallback = object : ScanCallback() {
-        @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device ?: return
             val address = device.address ?: return
-            val deviceName = if (hasConnectPermission()) {
-                result.scanRecord?.deviceName ?: device.name ?: "HR Monitor (${address.takeLast(5)})"
-            } else {
-                result.scanRecord?.deviceName ?: "HR Monitor (${address.takeLast(5)})"
-            }
+            val deviceName = resolveScanDeviceName(result, device, address, "HR Monitor")
             val candidate = DiscoveredBleSensor(
                 name = deviceName,
                 address = address,
@@ -964,18 +974,7 @@ class BleCyclingSensorManager(private val context: Context) {
             }
 
             if (!hasConnectPermission()) return
-            gatt.setCharacteristicNotification(hrChar, true)
-            val cccd = hrChar.getDescriptor(CCCD_UUID)
-            if (cccd != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    @Suppress("DEPRECATION")
-                    gatt.writeDescriptor(cccd)
-                }
-            }
+            enableCharacteristicNotifications(gatt, hrChar)
 
             val sensorName = _sensorState.value.pairedHrSensor?.name ?: "Heart Rate Monitor"
             _sensorState.update {

@@ -35,14 +35,11 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,10 +59,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.remote.TopoTileLoader
@@ -82,16 +77,16 @@ import com.example.ui.theme.DifficultyEasyColor
 import com.example.ui.theme.DifficultyExpertColor
 import com.example.ui.theme.DifficultyIntermediateColor
 import com.example.ui.theme.DifficultyUnratedColor
+import com.example.ui.theme.PineDeep
 import com.example.ui.theme.Terracotta
-import kotlinx.coroutines.launch
+import com.example.ui.theme.TopoMapBadgeScrim
+import com.example.ui.theme.TopoMapFallbackDark
+import com.example.ui.theme.TopoMapFallbackLight
 import kotlin.math.PI
 import kotlin.math.asin
 import kotlin.math.atan2
-import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.pow
-import kotlin.math.roundToInt
 import kotlin.math.sin
 
 @Composable
@@ -107,7 +102,6 @@ fun TrailRadarMap(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val coroutineScope = rememberCoroutineScope()
     val tileLoader = remember(context) { TopoTileLoader(context) }
     val textMeasurer: TextMeasurer = rememberTextMeasurer()
 
@@ -123,12 +117,11 @@ fun TrailRadarMap(
     }
 
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    var tileTick by remember { mutableIntStateOf(0) }
 
     val latestTrails by rememberUpdatedState(trails)
     val baseTilePx = with(density) { 200.dp.toPx() }
     val isDark = isSystemInDarkTheme()
-    val fallbackBg = if (isDark) Color(0xFF13211B) else Color(0xFFEBE7DC)
+    val fallbackBg = if (isDark) TopoMapFallbackDark else TopoMapFallbackLight
     val contourColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
     val routeLabelStyle = MaterialTheme.typography.labelSmall
 
@@ -147,36 +140,14 @@ fun TrailRadarMap(
         buildGeodesicCircle(origin.lat, origin.lon, 10.0)
     }
 
-    val tileZoom = zoom.roundToInt().coerceIn(8, 17)
-    val visibleTiles = remember(centerLat, centerLon, zoom, canvasSize) {
-        if (canvasSize.width == 0 || canvasSize.height == 0) {
-            emptyList()
-        } else {
-            WebMercatorUtils.computeVisibleTiles(
-                centerLat = centerLat,
-                centerLon = centerLon,
-                zoom = zoom,
-                tileZoom = tileZoom,
-                baseTilePx = baseTilePx,
-                viewportWidth = canvasSize.width.toFloat(),
-                viewportHeight = canvasSize.height.toFloat()
-            )
-        }
-    }
-
-    // Launch non-cancelling tile loads in coroutineScope so active panning doesn't abort downloads
-    LaunchedEffect(visibleTiles) {
-        visibleTiles.forEach { spec ->
-            if (tileLoader.shouldFetch(spec.z, spec.x, spec.y)) {
-                coroutineScope.launch {
-                    val loaded = tileLoader.loadTile(spec.z, spec.x, spec.y)
-                    if (loaded != null) {
-                        tileTick++
-                    }
-                }
-            }
-        }
-    }
+    val tileOverlayState = rememberTopoTileOverlayState(
+        centerLat = centerLat,
+        centerLon = centerLon,
+        zoom = zoom,
+        canvasSize = canvasSize,
+        baseTilePx = baseTilePx,
+        tileLoader = tileLoader
+    )
 
     val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f) }
     val ring10Stroke = remember(dashEffect) { Stroke(width = 2.5f, pathEffect = dashEffect) }
@@ -281,51 +252,18 @@ fun TrailRadarMap(
                     }
                 }
         ) {
-            if (tileTick < 0) return@Canvas
+            drawTopoTileBackdrop(
+                overlayState = tileOverlayState,
+                centerLat = centerLat,
+                centerLon = centerLon,
+                zoom = zoom,
+                baseTilePx = baseTilePx,
+                contourColor = contourColor,
+                isDark = isDark
+            )
 
             val w = size.width
             val h = size.height
-
-            // Procedural topo grid fallback underneath tiles
-            val gridStep = 64f
-            var gx = 0f
-            while (gx < w) {
-                drawLine(contourColor, Offset(gx, 0f), Offset(gx, h), strokeWidth = 1f)
-                gx += gridStep
-            }
-            var gy = 0f
-            while (gy < h) {
-                drawLine(contourColor, Offset(0f, gy), Offset(w, gy), strokeWidth = 1f)
-                gy += gridStep
-            }
-
-            // 1. Draw Topographic Map Tiles
-            val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
-            val renderedTilePx = baseTilePx * scaleFactor
-            val cTileXInt = WebMercatorUtils.lonToTileX(centerLon, tileZoom.toDouble())
-            val cTileYInt = WebMercatorUtils.latToTileY(centerLat, tileZoom.toDouble())
-
-            for (spec in visibleTiles) {
-                val bitmap = tileLoader.getCachedTile(spec.z, spec.x, spec.y) ?: continue
-                val nInt = 1 shl spec.z
-                var dxTiles = spec.x - cTileXInt
-                if (dxTiles > nInt / 2.0) dxTiles -= nInt
-                if (dxTiles < -nInt / 2.0) dxTiles += nInt
-
-                val left = w / 2f + (dxTiles * renderedTilePx).toFloat()
-                val top = h / 2f + ((spec.y - cTileYInt) * renderedTilePx).toFloat()
-                val tileDim = ceil(renderedTilePx).toInt() + 1
-
-                drawImage(
-                    image = bitmap,
-                    dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
-                    dstSize = IntSize(tileDim, tileDim)
-                )
-            }
-
-            if (isDark) {
-                drawRect(color = Color.Black.copy(alpha = 0.20f))
-            }
 
             val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
             val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
@@ -340,7 +278,7 @@ fun TrailRadarMap(
                 points = innerRing10Mi,
                 toScreen = ::toScreen,
                 reusablePath = reusablePath,
-                color = Color(0xFF133125).copy(alpha = 0.55f),
+                color = PineDeep.copy(alpha = 0.55f),
                 stroke = ring10Stroke
             )
             drawGeodesicRing(
@@ -387,35 +325,19 @@ fun TrailRadarMap(
                 }
                 for (trail in labeledTrails) {
                     val pos = toScreen(GeoPoint(trail.centerLat, trail.centerLon))
-                    if (pos.x in -40f..(w + 40f) && pos.y in -40f..(h + 40f)) {
-                        val labelText = trail.name.take(26)
-                        val measured = labelLayoutCache.getOrPut(labelText) {
-                            textMeasurer.measure(
-                                text = labelText,
-                                style = routeLabelStyle
-                            )
-                        }
-                        val padH = 6f
-                        val padV = 3f
-                        val labelTopLeft = Offset(
-                            x = (pos.x - measured.size.width / 2f).coerceIn(8f, (w - measured.size.width - 16f).coerceAtLeast(8f)),
-                            y = (pos.y - measured.size.height - 16f).coerceAtLeast(8f)
-                        )
-                        drawRoundRect(
-                            color = Color(0xFF133125).copy(alpha = if (trail.osmKey == selectedPin?.osmKey) 0.92f else 0.76f),
-                            topLeft = Offset(labelTopLeft.x - padH, labelTopLeft.y - padV),
-                            size = androidx.compose.ui.geometry.Size(
-                                measured.size.width + padH * 2,
-                                measured.size.height + padV * 2
-                            ),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f)
-                        )
-                        drawText(
-                            textLayoutResult = measured,
-                            color = Color.White,
-                            topLeft = labelTopLeft
+                    val labelText = trail.name.take(26)
+                    val measured = labelLayoutCache.getOrPut(labelText) {
+                        textMeasurer.measure(
+                            text = labelText,
+                            style = routeLabelStyle
                         )
                     }
+                    drawMapLabelBadge(
+                        measured = measured,
+                        anchor = pos,
+                        badgeAlpha = if (trail.osmKey == selectedPin?.osmKey) 0.92f else 0.76f,
+                        badgeColor = TopoMapBadgeScrim
+                    )
                 }
             }
 

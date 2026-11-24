@@ -7,27 +7,52 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ApplicationProvider
-import org.robolectric.Robolectric
 import com.example.data.export.GpxExporter
+import com.example.data.export.GpxTrackParser
+import com.example.data.health.HealthConnectAvailability
+import com.example.data.health.HealthConnectStatus
+import com.example.data.local.GpxTrackStorage
 import com.example.data.remote.SingletrackImageLoader
+import com.example.data.repository.GpxNavigationEngine
+import com.example.domain.model.ActiveRideMetrics
+import com.example.domain.model.BleSensorUiState
 import com.example.domain.model.GeoPoint
+import com.example.domain.model.GpxNavigationState
+import com.example.domain.model.GpxWaypoint
+import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.ui.components.TrailNavigationHelper
+import com.example.ui.screens.RideScreen
+import com.example.ui.theme.SingletrackTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class SingletrackAppRobolectricTest {
+
+    @get:Rule
+    val composeRule = createComposeRule()
 
     @Test
     fun `app name matches Singletrack MTB`() {
@@ -162,5 +187,112 @@ class SingletrackAppRobolectricTest {
         val loader = SingletrackImageLoader.get(context)
         assertNotNull(loader.memoryCache)
         assertNotNull(loader.diskCache)
+    }
+
+    @Test
+    fun `gpx track storage round trips and clears active track`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val storage = GpxTrackStorage(context)
+        storage.clearActiveTrack()
+
+        val track = GpxTrackParser.buildTrack(
+            id = "stored-1",
+            name = "Amasa Back Loop",
+            fileName = "amasa.gpx",
+            rawPoints = listOf(
+                Triple(38.5320, -109.5910, 1210.0),
+                Triple(38.5360, -109.5960, 1270.0),
+                Triple(38.5400, -109.5920, 1245.0)
+            ),
+            waypoints = listOf(GpxWaypoint(38.5360, -109.5960, "Summit Lookout", "Scenic view")),
+            isReversed = true
+        )
+
+        storage.saveActiveTrack(track)
+        val restored = storage.loadActiveTrack()
+        assertNotNull(restored)
+        assertEquals("stored-1", restored?.id)
+        assertEquals("Amasa Back Loop", restored?.name)
+        assertEquals("amasa.gpx", restored?.fileName)
+        assertEquals(3, restored?.points?.size)
+        assertEquals(1, restored?.waypoints?.size)
+        assertTrue(restored?.isReversed == true)
+        assertEquals(track.totalDistanceMiles, restored?.totalDistanceMiles ?: 0.0, 0.001)
+
+        storage.clearActiveTrack()
+        assertNull(storage.loadActiveTrack())
+    }
+
+    @Test
+    fun `ride screen displays gpx track navigator at bottom and triggers select and navigate actions`() {
+        var selectClicked = false
+        var navigateClicked = false
+        var reverseClicked = false
+
+        val track = GpxTrackParser.buildTrack(
+            id = "ui-track-1",
+            name = "Whole Enchilada Sample",
+            fileName = "enchilada.gpx",
+            rawPoints = listOf(
+                Triple(38.5700, -109.5500, 1200.0),
+                Triple(38.5750, -109.5450, 1260.0)
+            )
+        )
+        val idleNavState = GpxNavigationEngine.idleState(track)
+
+        composeRule.setContent {
+            SingletrackTheme {
+                RideScreen(
+                    activeRide = ActiveRideMetrics(),
+                    recordedRides = emptyList(),
+                    measurementUnit = MeasurementUnit.IMPERIAL,
+                    bleSensorState = BleSensorUiState(),
+                    healthConnectStatus = HealthConnectStatus(
+                        availability = HealthConnectAvailability.UNAVAILABLE,
+                        permissionsGranted = false
+                    ),
+                    autoSyncEnabled = false,
+                    syncingRideId = null,
+                    hasLocationPermission = true,
+                    onOpenSettings = {},
+                    onOpenRecordingScreen = {},
+                    onRequestLocationPermission = {},
+                    onConnectHealthConnect = {},
+                    onInstallHealthConnect = {},
+                    onOpenHealthConnectSettings = {},
+                    onOpenGoogleFit = {},
+                    onToggleAutoSync = {},
+                    onStartRide = {},
+                    onPauseRide = {},
+                    onResumeRide = {},
+                    onFinishRide = {},
+                    onDiscardRide = {},
+                    onOpenRideDetail = {},
+                    onShareRideGpx = {},
+                    onSyncRide = {},
+                    onDeleteRide = {},
+                    gpxNavigation = idleNavState,
+                    onSelectGpxFile = { selectClicked = true },
+                    onStartGpxNavigation = { navigateClicked = true },
+                    onReverseGpxTrack = { reverseClicked = true }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("ride_screen_list")
+            .performScrollToNode(hasTestTag("gpx_track_navigator_section"))
+        composeRule.onNodeWithTag("ride_screen_list")
+            .performTouchInput { swipeUp() }
+
+        composeRule.onNodeWithTag("gpx_track_navigator_section").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_live_guidance_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_toggle_navigation_button").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("gpx_reverse_track_button").performClick()
+        composeRule.onNodeWithTag("ride_screen_list").performTouchInput { swipeUp() }
+        composeRule.onNodeWithTag("gpx_select_file_button").performClick()
+
+        assertTrue(navigateClicked)
+        assertTrue(reverseClicked)
+        assertTrue(selectClicked)
     }
 }

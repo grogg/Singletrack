@@ -15,6 +15,7 @@ import com.example.domain.model.OfflineRegion
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailElevationProfile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -370,6 +371,8 @@ class TrailRepository(
         for (endpoint in OverpassClient.ENDPOINTS) {
             try {
                 return OverpassClient.service.query(url = endpoint, query = query)
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (e: Exception) {
                 lastError = e
             }

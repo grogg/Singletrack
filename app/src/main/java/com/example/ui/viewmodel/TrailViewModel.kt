@@ -3,23 +3,28 @@ package com.example.ui.viewmodel
 import android.app.Application
 import android.content.Context
 import android.location.Location
+import android.net.Uri
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.bluetooth.BleCyclingSensorManager
 import com.example.data.bluetooth.CscSensorReading
 import com.example.data.bluetooth.HrSensorReading
+import com.example.data.export.GpxTrackParser
 import com.example.data.health.HealthConnectSyncManager
+import com.example.data.local.GpxTrackStorage
 import com.example.data.local.SingletrackDatabase
 import com.example.data.location.DeviceLocationResult
 import com.example.data.location.LocationProvider
 import com.example.data.location.RideTracker
 import com.example.data.repository.GeoUtils
+import com.example.data.repository.GpxNavigationEngine
 import com.example.data.repository.RideRepository
 import com.example.data.repository.TrailRepository
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.DiscoveredBleSensor
 import com.example.domain.model.GeoPoint
+import com.example.domain.model.GpxNavigationState
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
@@ -58,6 +63,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private val rideRepository = RideRepository(database.offlineTrailDao())
     private val locationProvider = LocationProvider(application)
     private val rideTracker = RideTracker(application)
+    private val gpxTrackStorage = GpxTrackStorage(application)
     private val prefs = application.getSharedPreferences("singletrack_prefs", Context.MODE_PRIVATE)
     val healthConnectSyncManager = HealthConnectSyncManager(application)
     val bleSensorManager = BleCyclingSensorManager(application)
@@ -76,6 +82,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
     private var rideTimerJob: Job? = null
     private var rideGpsJob: Job? = null
+    private var gpxNavGpsJob: Job? = null
+    private var gpxInitFixJob: Job? = null
     private var detailLoadJob: Job? = null
     private var lastAltitudeMeters: Double? = null
     private var rideCadenceSum: Long = 0L
@@ -90,6 +98,18 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         observeBleSensors()
         refreshHealthConnectStatus()
         initializeStartupTrails()
+        viewModelScope.launch {
+            val savedTrack = withContext(Dispatchers.IO) { gpxTrackStorage.loadActiveTrack() }
+            if (savedTrack != null) {
+                _uiState.update { state ->
+                    if (state.gpxNavigation.track == null) {
+                        state.copy(gpxNavigation = GpxNavigationEngine.idleState(savedTrack))
+                    } else {
+                        state
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             yield()
             if (bleSensorManager.hasRequiredPermissions()) {
@@ -293,6 +313,207 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeRecordingScreen() {
         _uiState.update { it.copy(isRecordingScreenOpen = false) }
+    }
+
+    // GPX Track Navigator operations
+    fun selectGpxFile(uri: Uri) {
+        viewModelScope.launch {
+            val parsed = withContext(Dispatchers.IO) {
+                GpxTrackParser.parseFromUri(getApplication(), uri)
+            }
+            parsed.onSuccess { track ->
+                gpxInitFixJob?.cancel()
+                gpxNavGpsJob?.cancel()
+                withContext(Dispatchers.IO) {
+                    gpxTrackStorage.saveActiveTrack(track)
+                }
+                _uiState.update {
+                    it.copy(
+                        gpxNavigation = GpxNavigationEngine.idleState(track),
+                        snackbarMessage = "Loaded GPX route \"${track.name}\" (${track.points.size} pts)"
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(snackbarMessage = "Could not load GPX file: ${err.localizedMessage ?: "Invalid GPX"}")
+                }
+            }
+        }
+    }
+
+    fun startGpxNavigation() {
+        val currentNav = _uiState.value.gpxNavigation
+        val track = currentNav.track ?: return
+        if (!locationProvider.hasLocationPermission()) {
+            _uiState.update {
+                it.copy(snackbarMessage = "Location permission is required to navigate GPX tracks.")
+            }
+            return
+        }
+
+        val initial = currentNav.userLocation?.let { loc ->
+            GpxNavigationEngine.updateNavigationProgress(
+                previousState = currentNav.copy(isNavigating = true, followUserLocation = true),
+                track = track,
+                userLat = loc.lat,
+                userLon = loc.lon,
+                userHeadingDegrees = currentNav.userHeadingDegrees
+            )
+        } ?: currentNav.copy(
+            isNavigating = true,
+            followUserLocation = true,
+            turnInstruction = "Acquiring GPS signal for ${track.name}…"
+        )
+
+        _uiState.update { it.copy(gpxNavigation = initial) }
+        syncGpxNavigationGpsLoop()
+
+        if (initial.userLocation == null) {
+            gpxInitFixJob?.cancel()
+            gpxInitFixJob = viewModelScope.launch {
+                val fix = locationProvider.getCurrentLocation()
+                if (fix is DeviceLocationResult.Success) {
+                    _uiState.update { state ->
+                        val nav = state.gpxNavigation
+                        val activeTrack = nav.track ?: return@update state
+                        if (!nav.isNavigating) return@update state
+                        state.copy(
+                            gpxNavigation = GpxNavigationEngine.updateNavigationProgress(
+                                previousState = nav,
+                                track = activeTrack,
+                                userLat = fix.lat,
+                                userLon = fix.lon,
+                                userHeadingDegrees = nav.userHeadingDegrees
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopGpxNavigation() {
+        gpxInitFixJob?.cancel()
+        gpxNavGpsJob?.cancel()
+        gpxNavGpsJob = null
+        _uiState.update { state ->
+            state.copy(
+                gpxNavigation = GpxNavigationEngine.idleState(state.gpxNavigation.track)
+            )
+        }
+    }
+
+    fun reverseGpxTrack() {
+        val currentNav = _uiState.value.gpxNavigation
+        val track = currentNav.track ?: return
+        val reversed = GpxTrackParser.reverseTrack(track)
+        viewModelScope.launch(Dispatchers.IO) {
+            gpxTrackStorage.saveActiveTrack(reversed)
+        }
+        _uiState.update { state ->
+            val nav = state.gpxNavigation
+            val updated = if (nav.isNavigating && nav.userLocation != null) {
+                GpxNavigationEngine.updateNavigationProgress(
+                    previousState = nav,
+                    track = reversed,
+                    userLat = nav.userLocation.lat,
+                    userLon = nav.userLocation.lon,
+                    userHeadingDegrees = nav.userHeadingDegrees
+                )
+            } else {
+                GpxNavigationEngine.idleState(reversed).copy(isFullScreenMap = nav.isFullScreenMap)
+            }
+            state.copy(
+                gpxNavigation = updated,
+                snackbarMessage = if (reversed.isReversed) "GPX track direction reversed" else "GPX track direction restored"
+            )
+        }
+    }
+
+    fun clearGpxTrack() {
+        gpxInitFixJob?.cancel()
+        gpxNavGpsJob?.cancel()
+        gpxNavGpsJob = null
+        viewModelScope.launch(Dispatchers.IO) {
+            gpxTrackStorage.clearActiveTrack()
+        }
+        _uiState.update { it.copy(gpxNavigation = GpxNavigationState()) }
+    }
+
+    fun openGpxFullScreenMap() {
+        _uiState.update { state ->
+            if (state.gpxNavigation.track == null) state
+            else state.copy(gpxNavigation = state.gpxNavigation.copy(isFullScreenMap = true))
+        }
+    }
+
+    fun closeGpxFullScreenMap() {
+        _uiState.update { state ->
+            state.copy(gpxNavigation = state.gpxNavigation.copy(isFullScreenMap = false))
+        }
+    }
+
+    fun toggleGpxFollowLocation() {
+        _uiState.update { state ->
+            state.copy(
+                gpxNavigation = state.gpxNavigation.copy(
+                    followUserLocation = !state.gpxNavigation.followUserLocation
+                )
+            )
+        }
+    }
+
+    fun disableGpxFollowLocation() {
+        _uiState.update { state ->
+            if (!state.gpxNavigation.followUserLocation) state
+            else state.copy(gpxNavigation = state.gpxNavigation.copy(followUserLocation = false))
+        }
+    }
+
+    private fun syncGpxNavigationGpsLoop() {
+        val state = _uiState.value
+        val shouldRunDedicatedGps = state.gpxNavigation.isNavigating &&
+            state.gpxNavigation.track != null &&
+            state.activeRide.status != RideRecordingStatus.RECORDING &&
+            locationProvider.hasLocationPermission()
+
+        if (!shouldRunDedicatedGps) {
+            gpxNavGpsJob?.cancel()
+            gpxNavGpsJob = null
+            return
+        }
+        if (gpxNavGpsJob?.isActive == true) return
+
+        gpxNavGpsJob = viewModelScope.launch {
+            rideTracker.trackLocationUpdates()
+                .catch { err ->
+                    _uiState.update {
+                        it.copy(snackbarMessage = "GPX navigation GPS error: ${err.localizedMessage ?: "Unavailable"}")
+                    }
+                }
+                .collect { location ->
+                    if (location.hasAccuracy() && location.accuracy > 50f) return@collect
+                    updateGpxLocation(location)
+                }
+        }
+    }
+
+    private fun updateGpxLocation(location: Location) {
+        _uiState.update { state ->
+            val nav = state.gpxNavigation
+            val track = nav.track ?: return@update state
+            if (!nav.isNavigating) return@update state
+            val heading = if (location.hasBearing()) location.bearing else nav.userHeadingDegrees
+            state.copy(
+                gpxNavigation = GpxNavigationEngine.updateNavigationProgress(
+                    previousState = nav,
+                    track = track,
+                    userLat = location.latitude,
+                    userLon = location.longitude,
+                    userHeadingDegrees = heading
+                )
+            )
+        }
     }
 
     fun setOpenRecordingScreenOnStart(enabled: Boolean) {
@@ -861,6 +1082,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         launchRideLoops()
+        syncGpxNavigationGpsLoop()
     }
 
     fun pauseRide() {
@@ -876,6 +1098,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         }
+        syncGpxNavigationGpsLoop()
     }
 
     fun resumeRide() {
@@ -886,6 +1109,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         launchRideLoops()
+        syncGpxNavigationGpsLoop()
     }
 
     fun discardRide() {
@@ -905,6 +1129,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 snackbarMessage = "Ride discarded"
             )
         }
+        syncGpxNavigationGpsLoop()
     }
 
     fun finishAndSaveRide() {
@@ -965,6 +1190,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 isRecordingScreenOpen = false
             )
         }
+        syncGpxNavigationGpsLoop()
 
         viewModelScope.launch {
             rideRepository.saveRide(ride)
@@ -1227,7 +1453,21 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 current.currentAltitudeFeet
             }
 
+            val nextGpxNav = if (state.gpxNavigation.isNavigating && state.gpxNavigation.track != null) {
+                val heading = if (location.hasBearing()) location.bearing else state.gpxNavigation.userHeadingDegrees
+                GpxNavigationEngine.updateNavigationProgress(
+                    previousState = state.gpxNavigation,
+                    track = state.gpxNavigation.track,
+                    userLat = location.latitude,
+                    userLon = location.longitude,
+                    userHeadingDegrees = heading
+                )
+            } else {
+                state.gpxNavigation
+            }
+
             state.copy(
+                gpxNavigation = nextGpxNav,
                 activeRide = current.copy(
                     distanceMiles = updatedDistance,
                     currentSpeedMph = speedMph,
@@ -1287,6 +1527,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
+        gpxInitFixJob?.cancel()
+        gpxNavGpsJob?.cancel()
         detailLoadJob?.cancel()
         bleSensorManager.release()
     }

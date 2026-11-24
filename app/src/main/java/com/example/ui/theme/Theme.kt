@@ -16,10 +16,10 @@ private val DarkColorScheme = darkColorScheme(
     primaryContainer = PineForest,
     onPrimaryContainer = SageSurface,
     secondary = TerracottaBright,
-    onSecondary = Color(0xFF3E1404),
-    secondaryContainer = Color(0xFF6B2810),
+    onSecondary = TerracottaOnDark,
+    secondaryContainer = TerracottaContainerDark,
     onSecondaryContainer = TerracottaSoft,
-    tertiary = Color(0xFF9AC5AF),
+    tertiary = SageTertiaryDark,
     onTertiary = PineDeep,
     background = NightPineBg,
     onBackground = NightSageInk,
@@ -29,9 +29,9 @@ private val DarkColorScheme = darkColorScheme(
     onSurfaceVariant = NightMossInk,
     surfaceContainerLow = NightPineSurface,
     surfaceContainer = NightPineCard,
-    surfaceContainerHigh = Color(0xFF22362D),
-    outline = Color(0xFF364D42),
-    outlineVariant = Color(0xFF26382F)
+    surfaceContainerHigh = NightPineHigh,
+    outline = NightPineOutline,
+    outlineVariant = NightPineOutlineVariant
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -55,7 +55,7 @@ private val LightColorScheme = lightColorScheme(
     surfaceContainer = SandstoneCard,
     surfaceContainerHigh = SandstoneVariant,
     outline = SageBorder,
-    outlineVariant = Color(0xFFE0DDD3)
+    outlineVariant = SandstoneOutlineVariant
 )
 
 val SingletrackShapes = Shapes(

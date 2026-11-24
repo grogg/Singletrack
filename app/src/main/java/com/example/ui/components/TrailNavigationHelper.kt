@@ -10,20 +10,26 @@ import java.util.Locale
 
 object TrailNavigationHelper {
 
-    fun buildDirectionsUris(trail: Trail): List<Uri> {
-        val lat = String.format(Locale.US, "%.6f", trail.centerLat)
-        val lon = String.format(Locale.US, "%.6f", trail.centerLon)
-        val encodedLabel = Uri.encode(trail.name)
+    fun buildDirectionsUris(trail: Trail): List<Uri> =
+        buildDirectionsUris(trail.centerLat, trail.centerLon, trail.name)
+
+    fun buildDirectionsUris(lat: Double, lon: Double, label: String): List<Uri> {
+        val latStr = String.format(Locale.US, "%.6f", lat)
+        val lonStr = String.format(Locale.US, "%.6f", lon)
+        val encodedLabel = Uri.encode(label)
         return listOf(
-            "geo:0,0?q=$lat,$lon($encodedLabel)".toUri(),
-            "google.navigation:q=$lat,$lon".toUri(),
-            "https://www.google.com/maps/dir/?api=1&destination=$lat,$lon".toUri()
+            "geo:0,0?q=$latStr,$lonStr($encodedLabel)".toUri(),
+            "google.navigation:q=$latStr,$lonStr".toUri(),
+            "https://www.google.com/maps/dir/?api=1&destination=$latStr,$lonStr".toUri()
         )
     }
 
-    fun buildDirectionsIntent(context: Context, trail: Trail): Intent {
+    fun buildDirectionsIntent(context: Context, trail: Trail): Intent =
+        buildDirectionsIntent(context, trail.centerLat, trail.centerLon, trail.name)
+
+    fun buildDirectionsIntent(context: Context, lat: Double, lon: Double, label: String): Intent {
         val packageManager = context.packageManager
-        val uris = buildDirectionsUris(trail)
+        val uris = buildDirectionsUris(lat, lon, label)
         for (uri in uris) {
             val candidate = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_DEFAULT)
             if (candidate.resolveActivity(packageManager) != null) {
@@ -43,7 +49,11 @@ object TrailNavigationHelper {
     }
 
     fun openTrailDirections(context: Context, trail: Trail) {
-        val intent = buildDirectionsIntent(context, trail)
+        openCoordinateDirections(context, trail.centerLat, trail.centerLon, trail.name)
+    }
+
+    fun openCoordinateDirections(context: Context, lat: Double, lon: Double, label: String) {
+        val intent = buildDirectionsIntent(context, lat, lon, label)
         val launched = runCatching {
             context.startActivity(intent)
         }.isSuccess

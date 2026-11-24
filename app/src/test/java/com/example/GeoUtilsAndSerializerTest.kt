@@ -4,8 +4,11 @@ import com.example.data.bluetooth.CscMeasurementParser
 import com.example.data.bluetooth.CscParserState
 import com.example.data.bluetooth.HrMeasurementParser
 import com.example.data.export.GpxExporter
+import com.example.data.export.GpxTrackParser
 import com.example.data.local.GeometrySerializer
+import com.example.data.remote.OverpassClient
 import com.example.data.repository.GeoUtils
+import com.example.data.repository.GpxNavigationEngine
 import com.example.data.repository.MapCameraState
 import com.example.data.repository.SampledRoutePoint
 import com.example.data.repository.WebMercatorUtils
@@ -13,6 +16,8 @@ import com.example.data.remote.OverpassCenter
 import com.example.data.remote.OverpassElement
 import com.example.domain.model.ElevationPoint
 import com.example.domain.model.GeoPoint
+import com.example.domain.model.GpxNavigationState
+import com.example.domain.model.GpxRouteStatus
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.PhysicalEffortRating
 import com.example.domain.model.RecordedRide
@@ -378,5 +383,144 @@ class GeoUtilsAndSerializerTest {
         val projectedCenterY = WebMercatorUtils.projectY(lat, zoom, ty, 600f, 256f)
         assertEquals(400f, projectedCenterX, 0.01f)
         assertEquals(300f, projectedCenterY, 0.01f)
+
+        val cam = WebMercatorUtils.computeBoundingCamera(
+            listOf(GeoPoint(38.57, -109.55), GeoPoint(38.58, -109.54))
+        )
+        assertEquals(38.575, cam.centerLat, 0.0001)
+        assertEquals(-109.545, cam.centerLon, 0.0001)
+        assertTrue(cam.zoom in 12.0f..15.0f)
+    }
+
+    @Test
+    fun overpassEndpoints_useEuMirrorsAndExcludeRu() {
+        assertTrue(OverpassClient.ENDPOINTS.isNotEmpty())
+        assertTrue(OverpassClient.ENDPOINTS.contains("https://overpass-api.de/api/interpreter"))
+        assertTrue(OverpassClient.ENDPOINTS.all { it.startsWith("https://") })
+        assertFalse(OverpassClient.ENDPOINTS.any { it.contains(".ru", ignoreCase = true) })
+    }
+
+    @Test
+    fun gpxTrackParser_parsesTracksRoutesWaypointsAndReverses() {
+        val sampleGpx = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <gpx version="1.1" creator="TestSuite">
+              <metadata><name>Meta Fallback</name></metadata>
+              <wpt lat="38.5720" lon="-109.5500">
+                <name>Trailhead Water</name>
+                <desc>Spigot near kiosk</desc>
+              </wpt>
+              <trk>
+                <name>Porcupine &amp; Rim</name>
+                <trkseg>
+                  <trkpt lat="38.5700" lon="-109.5500"><ele>1200.0</ele></trkpt>
+                  <trkpt lat="38.5740" lon="-109.5500"><ele>1250.0</ele></trkpt>
+                  <trkpt lat="38.5740" lon="-109.5440"><ele>1220.0</ele></trkpt>
+                </trkseg>
+              </trk>
+            </gpx>
+        """.trimIndent()
+
+        val track = GpxTrackParser.parseFromXml(sampleGpx, "porcupine.gpx").getOrThrow()
+        assertEquals("Porcupine & Rim", track.name)
+        assertEquals("porcupine.gpx", track.fileName)
+        assertEquals(3, track.points.size)
+        assertEquals(1, track.waypoints.size)
+        assertEquals("Trailhead Water", track.waypoints.first().name)
+        assertTrue(track.totalDistanceMiles > 0.5)
+        assertTrue(track.elevationGainFeet > 150.0)
+        assertFalse(track.isReversed)
+
+        val reversed = GpxTrackParser.reverseTrack(track)
+        assertTrue(reversed.isReversed)
+        assertEquals(track.points.last().lat, reversed.points.first().lat, 0.00001)
+        assertEquals(track.totalDistanceMiles, reversed.totalDistanceMiles, 0.001)
+
+        // Route points (<rte>/<rtept>) fallback
+        val routeGpx = """
+            <gpx version="1.1">
+              <rte>
+                <name>Route Loop</name>
+                <rtept lat="38.5700" lon="-109.5500"/>
+                <rtept lat="38.5750" lon="-109.5480"/>
+              </rte>
+            </gpx>
+        """.trimIndent()
+        val routeTrack = GpxTrackParser.parseFromXml(routeGpx, "loop.gpx").getOrThrow()
+        assertEquals("Route Loop", routeTrack.name)
+        assertEquals(2, routeTrack.points.size)
+    }
+
+    @Test
+    fun gpxNavigationEngine_computesOnTrackOffRouteTurnCueFinishAndNonFiniteGuard() {
+        // North 0.3 mi -> turn right East 0.3 mi
+        val track = GpxTrackParser.buildTrack(
+            id = "nav-1",
+            name = "L-Bend Singletrack",
+            fileName = "lbend.gpx",
+            rawPoints = listOf(
+                Triple(38.5700, -109.5500, 1200.0),
+                Triple(38.5743, -109.5500, 1210.0),
+                Triple(38.5743, -109.5444, 1215.0)
+            )
+        )
+        val idle = GpxNavigationEngine.idleState(track)
+        assertEquals(GpxRouteStatus.IDLE, idle.routeStatus)
+        assertEquals(track.totalDistanceMiles, idle.distanceRemainingMiles, 0.001)
+
+        // 1. On track moving north approaching right turn
+        val onTrack = GpxNavigationEngine.updateNavigationProgress(
+            previousState = idle.copy(isNavigating = true),
+            track = track,
+            userLat = 38.5730,
+            userLon = -109.5500
+        )
+        assertEquals(GpxRouteStatus.ON_TRACK, onTrack.routeStatus)
+        assertTrue(onTrack.distanceCompletedMiles > 0.15)
+        assertTrue(onTrack.distanceRemainingMiles > 0.25)
+        assertTrue(onTrack.turnInstruction.contains("right", ignoreCase = true))
+
+        // 2. Off route (> 180 ft west of track)
+        val offRoute = GpxNavigationEngine.updateNavigationProgress(
+            previousState = onTrack,
+            track = track,
+            userLat = 38.5720,
+            userLon = -109.5530
+        )
+        assertEquals(GpxRouteStatus.OFF_ROUTE, offRoute.routeStatus)
+        assertTrue((offRoute.offRouteFeet ?: 0.0) > 500.0)
+        assertTrue(offRoute.turnInstruction.contains("Return", ignoreCase = true))
+
+        // 3. Finished near end point
+        val finished = GpxNavigationEngine.updateNavigationProgress(
+            previousState = onTrack,
+            track = track,
+            userLat = 38.5743,
+            userLon = -109.5444
+        )
+        assertEquals(GpxRouteStatus.FINISHED, finished.routeStatus)
+        assertEquals(1.0f, finished.progressFraction, 0.01f)
+
+        // 4. NaN coordinates safely return previousState
+        val nanGuarded = GpxNavigationEngine.updateNavigationProgress(
+            previousState = onTrack,
+            track = track,
+            userLat = Double.NaN,
+            userLon = -109.5500
+        )
+        assertEquals(onTrack, nanGuarded)
+
+        // 5. Large 5000-point track stress test stays fast
+        val densePoints = (0 until 5000).map { idx ->
+            Triple(38.5700 + idx * 0.00001, -109.5500 + idx * 0.00001, 1200.0)
+        }
+        val denseTrack = GpxTrackParser.buildTrack("dense", "Dense", "dense.gpx", densePoints)
+        val denseState = GpxNavigationEngine.updateNavigationProgress(
+            previousState = GpxNavigationState(track = denseTrack, isNavigating = true),
+            track = denseTrack,
+            userLat = 38.5950,
+            userLon = -109.5250
+        )
+        assertEquals(GpxRouteStatus.ON_TRACK, denseState.routeStatus)
     }
 }

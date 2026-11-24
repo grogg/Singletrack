@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.domain.model.GeoPoint
+import com.example.ui.theme.DifficultyEasyColor
 import com.example.ui.theme.PineDeep
 import com.example.ui.theme.Terracotta
 
@@ -87,7 +88,7 @@ fun TrailShapeCanvas(
 
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
     val surfaceBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-    val startColor = Color(0xFF2E7D32)
+    val startColor = DifficultyEasyColor
     val endColor = lineColor
     val glowStroke = remember {
         Stroke(width = 14f, cap = StrokeCap.Round, join = StrokeJoin.Round)

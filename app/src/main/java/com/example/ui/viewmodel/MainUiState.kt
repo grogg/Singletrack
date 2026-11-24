@@ -5,6 +5,7 @@ import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.BleSensorUiState
+import com.example.domain.model.GpxNavigationState
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.OfflineRegion
@@ -59,6 +60,7 @@ data class MainUiState(
     val recordedRides: List<RecordedRide> = emptyList(),
     val selectedRide: RecordedRide? = null,
     val isFullScreenRideMap: Boolean = false,
+    val gpxNavigation: GpxNavigationState = GpxNavigationState(),
     val bleSensorState: BleSensorUiState = BleSensorUiState(),
     val healthConnectStatus: HealthConnectStatus = HealthConnectStatus(
         availability = HealthConnectAvailability.UNAVAILABLE,

@@ -27,21 +27,16 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -52,14 +47,11 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.data.remote.TopoTileLoader
-import com.example.data.repository.GeoUtils
 import com.example.data.repository.MapCameraState
 import com.example.data.repository.WebMercatorUtils
 import com.example.domain.model.GeoPoint
@@ -68,10 +60,8 @@ import com.example.domain.model.RecordedRide
 import com.example.ui.theme.DifficultyEasyColor
 import com.example.ui.theme.Terracotta
 import com.example.ui.theme.TerracottaBright
-import kotlinx.coroutines.launch
-import kotlin.math.ceil
-import kotlin.math.pow
-import kotlin.math.roundToInt
+import com.example.ui.theme.TopoMapFallbackDark
+import com.example.ui.theme.TopoMapFallbackLight
 
 @Composable
 fun RecordedRideTopoMap(
@@ -83,7 +73,6 @@ fun RecordedRideTopoMap(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val coroutineScope = rememberCoroutineScope()
     val tileLoader = remember(context) { TopoTileLoader(context) }
     val textMeasurer = rememberTextMeasurer()
 
@@ -96,7 +85,7 @@ fun RecordedRideTopoMap(
     }
 
     val initialBounds = remember(routePoints) {
-        computeInitialCamera(routePoints)
+        WebMercatorUtils.computeBoundingCamera(routePoints)
     }
 
     var centerLat by remember(ride.id, initialBounds) { mutableDoubleStateOf(initialBounds.centerLat) }
@@ -104,44 +93,23 @@ fun RecordedRideTopoMap(
     var zoom by remember(ride.id, initialBounds) { mutableFloatStateOf(initialBounds.zoom) }
 
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    var tileTick by remember { mutableIntStateOf(0) }
 
     val baseTilePx = with(density) { 200.dp.toPx() }
     val isDark = isSystemInDarkTheme()
-    val fallbackBg = if (isDark) Color(0xFF13211B) else Color(0xFFEBE7DC)
+    val fallbackBg = if (isDark) TopoMapFallbackDark else TopoMapFallbackLight
     val contourColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
     val routeAccent = if (isDark) TerracottaBright else Terracotta
     val endpointLabelStyle = MaterialTheme.typography.labelSmall
 
-    val tileZoom = zoom.roundToInt().coerceIn(8, 17)
-    val visibleTiles = remember(centerLat, centerLon, zoom, canvasSize) {
-        if (canvasSize.width == 0 || canvasSize.height == 0 || routePoints.isEmpty()) {
-            emptyList()
-        } else {
-            WebMercatorUtils.computeVisibleTiles(
-                centerLat = centerLat,
-                centerLon = centerLon,
-                zoom = zoom,
-                tileZoom = tileZoom,
-                baseTilePx = baseTilePx,
-                viewportWidth = canvasSize.width.toFloat(),
-                viewportHeight = canvasSize.height.toFloat()
-            )
-        }
-    }
-
-    LaunchedEffect(visibleTiles) {
-        visibleTiles.forEach { spec ->
-            if (tileLoader.shouldFetch(spec.z, spec.x, spec.y)) {
-                coroutineScope.launch {
-                    val loaded = tileLoader.loadTile(spec.z, spec.x, spec.y)
-                    if (loaded != null) {
-                        tileTick++
-                    }
-                }
-            }
-        }
-    }
+    val tileOverlayState = rememberTopoTileOverlayState(
+        centerLat = centerLat,
+        centerLon = centerLon,
+        zoom = zoom,
+        canvasSize = canvasSize,
+        baseTilePx = baseTilePx,
+        tileLoader = tileLoader,
+        enabled = routePoints.isNotEmpty()
+    )
 
     val reusableRoutePath = remember { Path() }
     val haloStroke = remember { Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
@@ -205,51 +173,18 @@ fun RecordedRideTopoMap(
                     }
                 }
         ) {
-            if (tileTick < 0) return@Canvas
+            drawTopoTileBackdrop(
+                overlayState = tileOverlayState,
+                centerLat = centerLat,
+                centerLon = centerLon,
+                zoom = zoom,
+                baseTilePx = baseTilePx,
+                contourColor = contourColor,
+                isDark = isDark
+            )
 
             val w = size.width
             val h = size.height
-
-            // Procedural topo contour grid fallback underneath tiles
-            val gridStep = 64f
-            var gx = 0f
-            while (gx < w) {
-                drawLine(contourColor, Offset(gx, 0f), Offset(gx, h), strokeWidth = 1f)
-                gx += gridStep
-            }
-            var gy = 0f
-            while (gy < h) {
-                drawLine(contourColor, Offset(0f, gy), Offset(w, gy), strokeWidth = 1f)
-                gy += gridStep
-            }
-
-            // 1. Topographic Map Tiles
-            val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
-            val renderedTilePx = baseTilePx * scaleFactor
-            val cTileXInt = WebMercatorUtils.lonToTileX(centerLon, tileZoom.toDouble())
-            val cTileYInt = WebMercatorUtils.latToTileY(centerLat, tileZoom.toDouble())
-
-            for (spec in visibleTiles) {
-                val bitmap = tileLoader.getCachedTile(spec.z, spec.x, spec.y) ?: continue
-                val nInt = 1 shl spec.z
-                var dxTiles = spec.x - cTileXInt
-                if (dxTiles > nInt / 2.0) dxTiles -= nInt
-                if (dxTiles < -nInt / 2.0) dxTiles += nInt
-
-                val left = w / 2f + (dxTiles * renderedTilePx).toFloat()
-                val top = h / 2f + ((spec.y - cTileYInt) * renderedTilePx).toFloat()
-                val tileDim = ceil(renderedTilePx).toInt() + 1
-
-                drawImage(
-                    image = bitmap,
-                    dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
-                    dstSize = IntSize(tileDim, tileDim)
-                )
-            }
-
-            if (isDark) {
-                drawRect(color = Color.Black.copy(alpha = 0.20f))
-            }
 
             val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
             val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
@@ -309,21 +244,7 @@ fun RecordedRideTopoMap(
                     }
                 }
                 badges.forEach { (measured, pt) ->
-                    if (pt.x in -20f..(w + 20f) && pt.y in -20f..(h + 20f)) {
-                        val padH = 6f
-                        val padV = 3f
-                        val tl = Offset(
-                            x = (pt.x - measured.size.width / 2f).coerceIn(8f, (w - measured.size.width - 16f).coerceAtLeast(8f)),
-                            y = (pt.y - measured.size.height - 16f).coerceAtLeast(8f)
-                        )
-                        drawRoundRect(
-                            color = Color(0xFF133125).copy(alpha = 0.88f),
-                            topLeft = Offset(tl.x - padH, tl.y - padV),
-                            size = Size(measured.size.width + padH * 2, measured.size.height + padV * 2),
-                            cornerRadius = CornerRadius(8f, 8f)
-                        )
-                        drawText(textLayoutResult = measured, color = Color.White, topLeft = tl)
-                    }
+                    drawMapLabelBadge(measured = measured, anchor = pt)
                 }
             }
         }
@@ -442,35 +363,4 @@ fun RecordedRideTopoMap(
             }
         }
     }
-}
-
-private data class RideMapCamera(
-    val centerLat: Double,
-    val centerLon: Double,
-    val zoom: Float
-)
-
-private fun computeInitialCamera(points: List<GeoPoint>): RideMapCamera {
-    if (points.isEmpty()) return RideMapCamera(39.0, -98.0, 12.0f)
-    if (points.size == 1) return RideMapCamera(points.first().lat, points.first().lon, 15.0f)
-
-    val minLat = points.minOf { it.lat }
-    val maxLat = points.maxOf { it.lat }
-    val minLon = points.minOf { it.lon }
-    val maxLon = points.maxOf { it.lon }
-
-    val cLat = (minLat + maxLat) / 2.0
-    val cLon = (minLon + maxLon) / 2.0
-    val spanMiles = GeoUtils.haversineMiles(minLat, minLon, maxLat, maxLon)
-
-    val zoom = when {
-        spanMiles < 0.25 -> 16.0f
-        spanMiles < 0.6 -> 15.0f
-        spanMiles < 1.5 -> 14.0f
-        spanMiles < 3.5 -> 13.0f
-        spanMiles < 8.0 -> 12.0f
-        spanMiles < 18.0 -> 11.0f
-        else -> 10.0f
-    }
-    return RideMapCamera(cLat, cLon, zoom)
 }

@@ -60,10 +60,12 @@ import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.BleConnectionStatus
 import com.example.domain.model.BleSensorUiState
+import com.example.domain.model.GpxNavigationState
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
 import com.example.ui.components.FormatUtils
+import com.example.ui.components.GpxTrackNavigatorSection
 import com.example.ui.components.TrailShapeCanvas
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -96,7 +98,16 @@ fun RideScreen(
     onDeleteRide: (String) -> Unit,
     modifier: Modifier = Modifier,
     topInset: Dp = 0.dp,
-    bottomInset: Dp = 0.dp
+    bottomInset: Dp = 0.dp,
+    gpxNavigation: GpxNavigationState = GpxNavigationState(),
+    onSelectGpxFile: () -> Unit = {},
+    onStartGpxNavigation: () -> Unit = {},
+    onStopGpxNavigation: () -> Unit = {},
+    onReverseGpxTrack: () -> Unit = {},
+    onClearGpxTrack: () -> Unit = {},
+    onOpenGpxFullScreenMap: () -> Unit = {},
+    onToggleGpxFollowLocation: () -> Unit = {},
+    onDisableGpxFollowLocation: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val hasGoogleFitInstalled = remember(context) {
@@ -609,6 +620,22 @@ fun RideScreen(
                     onDelete = { onDeleteRide(ride.id) }
                 )
             }
+        }
+
+        item(key = "gpx_track_navigator") {
+            GpxTrackNavigatorSection(
+                gpxNavigation = gpxNavigation,
+                measurementUnit = measurementUnit,
+                hasLocationPermission = hasLocationPermission,
+                onSelectGpxFile = onSelectGpxFile,
+                onStartNavigation = onStartGpxNavigation,
+                onStopNavigation = onStopGpxNavigation,
+                onReverseTrack = onReverseGpxTrack,
+                onClearTrack = onClearGpxTrack,
+                onOpenFullScreenMap = onOpenGpxFullScreenMap,
+                onToggleFollowLocation = onToggleGpxFollowLocation,
+                onDisableFollowLocation = onDisableGpxFollowLocation
+            )
         }
     }
 }

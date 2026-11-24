@@ -108,6 +108,8 @@ fun ExploreScreen(
 ) {
     val unit = state.measurementUnit
     var sortMenuExpanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
 
     Column(modifier = modifier.fillMaxSize()) {
         // Atmospheric Trail Hero Banner bleeding behind status bar when topInset > 0
@@ -117,8 +119,6 @@ fun ExploreScreen(
                 .height(IntrinsicSize.Min)
                 .defaultMinSize(minHeight = 144.dp + topInset)
         ) {
-            val context = LocalContext.current
-            val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
             AsyncImage(
                 model = R.drawable.img_trail_hero,
                 imageLoader = imageLoader,
@@ -306,6 +306,7 @@ fun ExploreScreen(
                 reason = state.locationUnavailableReason,
                 hasPermission = state.hasLocationPermission,
                 measurementUnit = unit,
+                imageLoader = imageLoader,
                 onRequestPermission = onRequestLocationPermission,
                 onRetryGps = onRefreshTrails,
                 onOpenLocationPicker = onOpenLocationPicker,
@@ -542,6 +543,7 @@ fun ExploreScreen(
                     onOpenLocationPicker = onOpenLocationPicker,
                     hasAnyTrails = state.trails.isNotEmpty(),
                     measurementUnit = unit,
+                    imageLoader = imageLoader,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(20.dp)
@@ -721,6 +723,7 @@ private fun LocationPermissionPromptCard(
     reason: String?,
     hasPermission: Boolean,
     measurementUnit: MeasurementUnit,
+    imageLoader: coil3.ImageLoader,
     onRequestPermission: () -> Unit,
     onRetryGps: () -> Unit,
     onOpenLocationPicker: () -> Unit,
@@ -735,8 +738,6 @@ private fun LocationPermissionPromptCard(
             modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            val context = LocalContext.current
-            val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
             AsyncImage(
                 model = R.drawable.img_trail_compass,
                 imageLoader = imageLoader,
@@ -790,6 +791,7 @@ private fun LocationPermissionPromptCard(
 private fun EmptyTrailsCard(
     hasAnyTrails: Boolean,
     measurementUnit: MeasurementUnit,
+    imageLoader: coil3.ImageLoader,
     onClearFilter: () -> Unit,
     onOpenLocationPicker: () -> Unit,
     modifier: Modifier = Modifier
@@ -802,8 +804,6 @@ private fun EmptyTrailsCard(
                 modifier = Modifier.padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                val context = LocalContext.current
-                val imageLoader = remember(context) { SingletrackImageLoader.get(context) }
                 AsyncImage(
                     model = R.drawable.img_trail_compass,
                     imageLoader = imageLoader,
