@@ -1,17 +1,19 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
-import android.content.Context
 import android.location.Location
 import android.net.Uri
-import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.audio.AndroidVoiceCueSpeaker
+import com.example.data.audio.VoiceCueAlertEngine
+import com.example.data.audio.VoiceCueSpeaker
 import com.example.data.bluetooth.BleCyclingSensorManager
 import com.example.data.bluetooth.CscSensorReading
 import com.example.data.bluetooth.HrSensorReading
 import com.example.data.export.GpxTrackParser
 import com.example.data.health.HealthConnectSyncManager
+import com.example.data.local.AppPreferences
 import com.example.data.local.GpxTrackStorage
 import com.example.data.local.SingletrackDatabase
 import com.example.data.location.DeviceLocationResult
@@ -64,16 +66,20 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private val locationProvider = LocationProvider(application)
     private val rideTracker = RideTracker(application)
     private val gpxTrackStorage = GpxTrackStorage(application)
-    private val prefs = application.getSharedPreferences("singletrack_prefs", Context.MODE_PRIVATE)
+    private val voiceCueSpeaker: VoiceCueSpeaker = AndroidVoiceCueSpeaker(application)
+    private val voiceCueAlertEngine = VoiceCueAlertEngine()
+    private val appPreferences = AppPreferences(application)
     val healthConnectSyncManager = HealthConnectSyncManager(application)
     val bleSensorManager = BleCyclingSensorManager(application)
 
     private val _uiState = MutableStateFlow(
         MainUiState(
-            measurementUnit = loadSavedUnit(),
-            loadOfflineMapsByDefault = loadSavedOfflineDefault(),
-            defaultOfflineRegionId = loadSavedDefaultOfflineRegionId(),
-            openRecordingScreenOnStart = loadSavedOpenRecordingOnStart(),
+            measurementUnit = appPreferences.measurementUnit,
+            loadOfflineMapsByDefault = appPreferences.loadOfflineMapsByDefault,
+            defaultOfflineRegionId = appPreferences.defaultOfflineRegionId,
+            openRecordingScreenOnStart = appPreferences.openRecordingScreenOnStart,
+            voiceCuesEnabled = appPreferences.voiceCuesEnabled,
+            autoSyncToHealthConnect = appPreferences.autoSyncToHealthConnect,
             hasLocationPermission = locationProvider.hasLocationPermission(),
             bleSensorState = bleSensorManager.sensorState.value
         )
@@ -84,7 +90,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private var rideGpsJob: Job? = null
     private var gpxNavGpsJob: Job? = null
     private var gpxInitFixJob: Job? = null
+    private var trailScanJob: Job? = null
     private var detailLoadJob: Job? = null
+    private val activeRidePoints = ArrayList<GeoPoint>()
+    private val activeRideSamples = ArrayList<RideSample>()
     private var lastAltitudeMeters: Double? = null
     private var rideCadenceSum: Long = 0L
     private var rideCadenceCount: Int = 0
@@ -324,6 +333,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             parsed.onSuccess { track ->
                 gpxInitFixJob?.cancel()
                 gpxNavGpsJob?.cancel()
+                voiceCueAlertEngine.resetGpxState()
                 withContext(Dispatchers.IO) {
                     gpxTrackStorage.saveActiveTrack(track)
                 }
@@ -351,6 +361,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        voiceCueAlertEngine.resetGpxState()
         val initial = currentNav.userLocation?.let { loc ->
             GpxNavigationEngine.updateNavigationProgress(
                 previousState = currentNav.copy(isNavigating = true, followUserLocation = true),
@@ -366,6 +377,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         _uiState.update { it.copy(gpxNavigation = initial) }
+        maybeSpeakOffRouteAlert(currentNav, initial)
         syncGpxNavigationGpsLoop()
 
         if (initial.userLocation == null) {
@@ -373,19 +385,23 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             gpxInitFixJob = viewModelScope.launch {
                 val fix = locationProvider.getCurrentLocation()
                 if (fix is DeviceLocationResult.Success) {
+                    var transition: Pair<GpxNavigationState, GpxNavigationState>? = null
                     _uiState.update { state ->
                         val nav = state.gpxNavigation
                         val activeTrack = nav.track ?: return@update state
                         if (!nav.isNavigating) return@update state
-                        state.copy(
-                            gpxNavigation = GpxNavigationEngine.updateNavigationProgress(
-                                previousState = nav,
-                                track = activeTrack,
-                                userLat = fix.lat,
-                                userLon = fix.lon,
-                                userHeadingDegrees = nav.userHeadingDegrees
-                            )
+                        val next = GpxNavigationEngine.updateNavigationProgress(
+                            previousState = nav,
+                            track = activeTrack,
+                            userLat = fix.lat,
+                            userLon = fix.lon,
+                            userHeadingDegrees = nav.userHeadingDegrees
                         )
+                        transition = nav to next
+                        state.copy(gpxNavigation = next)
+                    }
+                    transition?.let { (prev, next) ->
+                        maybeSpeakOffRouteAlert(prev, next)
                     }
                 }
             }
@@ -396,6 +412,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         gpxInitFixJob?.cancel()
         gpxNavGpsJob?.cancel()
         gpxNavGpsJob = null
+        voiceCueAlertEngine.resetGpxState()
+        if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) {
+            voiceCueSpeaker.stop()
+        }
         _uiState.update { state ->
             state.copy(
                 gpxNavigation = GpxNavigationEngine.idleState(state.gpxNavigation.track)
@@ -407,9 +427,11 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         val currentNav = _uiState.value.gpxNavigation
         val track = currentNav.track ?: return
         val reversed = GpxTrackParser.reverseTrack(track)
+        voiceCueAlertEngine.resetGpxState()
         viewModelScope.launch(Dispatchers.IO) {
             gpxTrackStorage.saveActiveTrack(reversed)
         }
+        var transition: Pair<GpxNavigationState, GpxNavigationState>? = null
         _uiState.update { state ->
             val nav = state.gpxNavigation
             val updated = if (nav.isNavigating && nav.userLocation != null) {
@@ -423,10 +445,14 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 GpxNavigationEngine.idleState(reversed).copy(isFullScreenMap = nav.isFullScreenMap)
             }
+            transition = nav to updated
             state.copy(
                 gpxNavigation = updated,
                 snackbarMessage = if (reversed.isReversed) "GPX track direction reversed" else "GPX track direction restored"
             )
+        }
+        transition?.let { (prev, next) ->
+            maybeSpeakOffRouteAlert(prev, next)
         }
     }
 
@@ -434,6 +460,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         gpxInitFixJob?.cancel()
         gpxNavGpsJob?.cancel()
         gpxNavGpsJob = null
+        voiceCueAlertEngine.resetGpxState()
+        if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) {
+            voiceCueSpeaker.stop()
+        }
         viewModelScope.launch(Dispatchers.IO) {
             gpxTrackStorage.clearActiveTrack()
         }
@@ -499,30 +529,38 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateGpxLocation(location: Location) {
+        var transition: Pair<GpxNavigationState, GpxNavigationState>? = null
         _uiState.update { state ->
             val nav = state.gpxNavigation
             val track = nav.track ?: return@update state
             if (!nav.isNavigating) return@update state
             val heading = if (location.hasBearing()) location.bearing else nav.userHeadingDegrees
-            state.copy(
-                gpxNavigation = GpxNavigationEngine.updateNavigationProgress(
-                    previousState = nav,
-                    track = track,
-                    userLat = location.latitude,
-                    userLon = location.longitude,
-                    userHeadingDegrees = heading
-                )
+            val next = GpxNavigationEngine.updateNavigationProgress(
+                previousState = nav,
+                track = track,
+                userLat = location.latitude,
+                userLon = location.longitude,
+                userHeadingDegrees = heading
             )
+            transition = nav to next
+            state.copy(gpxNavigation = next)
+        }
+        transition?.let { (prev, next) ->
+            maybeSpeakOffRouteAlert(prev, next)
         }
     }
 
-    fun setOpenRecordingScreenOnStart(enabled: Boolean) {
-        prefs.edit { putBoolean(KEY_OPEN_RECORDING_SCREEN_ON_START, enabled) }
-        _uiState.update { it.copy(openRecordingScreenOnStart = enabled) }
+    fun setVoiceCuesEnabled(enabled: Boolean) {
+        appPreferences.voiceCuesEnabled = enabled
+        if (!enabled) {
+            voiceCueSpeaker.stop()
+        }
+        _uiState.update { it.copy(voiceCuesEnabled = enabled) }
     }
 
-    private fun loadSavedOpenRecordingOnStart(): Boolean {
-        return prefs.getBoolean(KEY_OPEN_RECORDING_SCREEN_ON_START, false)
+    fun setOpenRecordingScreenOnStart(enabled: Boolean) {
+        appPreferences.openRecordingScreenOnStart = enabled
+        _uiState.update { it.copy(openRecordingScreenOnStart = enabled) }
     }
 
     fun notifyMessage(message: String) {
@@ -530,25 +568,16 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setMeasurementUnit(unit: MeasurementUnit) {
-        prefs.edit { putString(KEY_MEASUREMENT_UNIT, unit.name) }
+        appPreferences.measurementUnit = unit
+        val active = _uiState.value.activeRide
+        if (active.status != RideRecordingStatus.IDLE) {
+            voiceCueAlertEngine.syncMilestoneBaseline(active.distanceMiles, unit)
+        }
         _uiState.update { it.copy(measurementUnit = unit) }
     }
 
-    private fun loadSavedUnit(): MeasurementUnit {
-        val raw = prefs.getString(KEY_MEASUREMENT_UNIT, null)
-        return MeasurementUnit.entries.firstOrNull { it.name == raw } ?: MeasurementUnit.IMPERIAL
-    }
-
-    private fun loadSavedOfflineDefault(): Boolean {
-        return prefs.getBoolean(KEY_LOAD_OFFLINE_BY_DEFAULT, false)
-    }
-
-    private fun loadSavedDefaultOfflineRegionId(): String? {
-        return prefs.getString(KEY_DEFAULT_OFFLINE_REGION_ID, null)
-    }
-
     fun setLoadOfflineMapsByDefault(enabled: Boolean) {
-        prefs.edit { putBoolean(KEY_LOAD_OFFLINE_BY_DEFAULT, enabled) }
+        appPreferences.loadOfflineMapsByDefault = enabled
         _uiState.update { state ->
             val fallbackId = if (enabled && state.defaultOfflineRegionId == null) {
                 state.offlineRegions.firstOrNull()?.id
@@ -556,7 +585,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 state.defaultOfflineRegionId
             }
             if (fallbackId != state.defaultOfflineRegionId && fallbackId != null) {
-                prefs.edit { putString(KEY_DEFAULT_OFFLINE_REGION_ID, fallbackId) }
+                appPreferences.defaultOfflineRegionId = fallbackId
             }
             state.copy(
                 loadOfflineMapsByDefault = enabled,
@@ -566,7 +595,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDefaultOfflineRegion(region: OfflineRegion) {
-        prefs.edit { putString(KEY_DEFAULT_OFFLINE_REGION_ID, region.id) }
+        appPreferences.defaultOfflineRegionId = region.id
         _uiState.update {
             it.copy(
                 defaultOfflineRegionId = region.id,
@@ -665,8 +694,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun scanTrailsAt(lat: Double, lon: Double) {
+        trailScanJob?.cancel()
         detailLoadJob?.cancel()
-        viewModelScope.launch {
+        trailScanJob = viewModelScope.launch {
             _uiState.update {
                 it.copy(
                     isLoadingTrails = true,
@@ -680,7 +710,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             val result = trailRepository.fetchTrailsNear(lat, lon)
             result.onSuccess { scan ->
                 _uiState.update { state ->
-                    val filtered = applyFiltersAndSort(
+                    val filtered = applyTrailFiltersAndSort(
                         trails = scan.trails,
                         query = state.searchQuery,
                         difficulty = state.selectedDifficulty,
@@ -716,7 +746,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             state.copy(
                 searchQuery = query,
-                filteredTrails = applyFiltersAndSort(
+                filteredTrails = applyTrailFiltersAndSort(
                     trails = state.trails,
                     query = query,
                     difficulty = state.selectedDifficulty,
@@ -731,7 +761,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             val next = if (state.selectedDifficulty == difficulty) null else difficulty
             state.copy(
                 selectedDifficulty = next,
-                filteredTrails = applyFiltersAndSort(
+                filteredTrails = applyTrailFiltersAndSort(
                     trails = state.trails,
                     query = state.searchQuery,
                     difficulty = next,
@@ -745,7 +775,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { state ->
             state.copy(
                 sortOrder = sortOrder,
-                filteredTrails = applyFiltersAndSort(
+                filteredTrails = applyTrailFiltersAndSort(
                     trails = state.trails,
                     query = state.searchQuery,
                     difficulty = state.selectedDifficulty,
@@ -918,7 +948,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openOfflineRegion(region: OfflineRegion) {
-        viewModelScope.launch {
+        trailScanJob?.cancel()
+        detailLoadJob?.cancel()
+        trailScanJob = viewModelScope.launch {
             val place = LocationPlace(
                 name = region.name,
                 lat = region.centerLat,
@@ -932,7 +964,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             )
             val currentState = _uiState.value
             val sortedTrails = withContext(Dispatchers.Default) {
-                applyFiltersAndSort(
+                applyTrailFiltersAndSort(
                     trails = trails,
                     query = currentState.searchQuery,
                     difficulty = currentState.selectedDifficulty,
@@ -947,7 +979,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 ) {
                     sortedTrails
                 } else {
-                    applyFiltersAndSort(
+                    applyTrailFiltersAndSort(
                         trails = trails,
                         query = state.searchQuery,
                         difficulty = state.selectedDifficulty,
@@ -979,13 +1011,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 val nextDefault = _uiState.value.offlineRegions
                     .firstOrNull { it.id != regionId }
                     ?.id
-                prefs.edit {
-                    if (nextDefault != null) {
-                        putString(KEY_DEFAULT_OFFLINE_REGION_ID, nextDefault)
-                    } else {
-                        remove(KEY_DEFAULT_OFFLINE_REGION_ID)
-                    }
-                }
+                appPreferences.defaultOfflineRegionId = nextDefault
                 _uiState.update {
                     it.copy(
                         defaultOfflineRegionId = nextDefault,
@@ -1051,6 +1077,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
+        activeRidePoints.clear()
+        activeRideSamples.clear()
         lastAltitudeMeters = null
         rideCadenceSum = 0L
         rideCadenceCount = 0
@@ -1058,6 +1086,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideHrSum = 0L
         rideHrCount = 0
         usedHrSensorInRide = false
+        voiceCueAlertEngine.resetRideMilestones()
         val paired = bleSensorManager.sensorState.value.pairedSensor
         val pairedHr = bleSensorManager.sensorState.value.pairedHrSensor
         if (bleSensorManager.hasRequiredPermissions()) {
@@ -1115,6 +1144,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     fun discardRide() {
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
+        activeRidePoints.clear()
+        activeRideSamples.clear()
         lastAltitudeMeters = null
         rideCadenceSum = 0L
         rideCadenceCount = 0
@@ -1122,6 +1153,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideHrSum = 0L
         rideHrCount = 0
         usedHrSensorInRide = false
+        voiceCueAlertEngine.resetRideMilestones()
+        if (!_uiState.value.gpxNavigation.isNavigating) {
+            voiceCueSpeaker.stop()
+        }
         _uiState.update {
             it.copy(
                 activeRide = ActiveRideMetrics(),
@@ -1138,6 +1173,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
         rideTimerJob?.cancel()
         rideGpsJob?.cancel()
+        val capturedPoints = if (activeRidePoints.isNotEmpty()) activeRidePoints.toList() else current.points
+        val capturedSamples = if (activeRideSamples.isNotEmpty()) activeRideSamples.toList() else current.samples
+        activeRidePoints.clear()
+        activeRideSamples.clear()
         lastAltitudeMeters = null
         rideCadenceSum = 0L
         rideCadenceCount = 0
@@ -1147,6 +1186,10 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideHrCount = 0
         val recordedWithHrSensor = usedHrSensorInRide
         usedHrSensorInRide = false
+        voiceCueAlertEngine.resetRideMilestones()
+        if (!_uiState.value.gpxNavigation.isNavigating) {
+            voiceCueSpeaker.stop()
+        }
 
         val endTime = System.currentTimeMillis()
         val durationSec = current.elapsedSeconds.coerceAtLeast(1L)
@@ -1172,8 +1215,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             avgSpeedMph = avgSpeedMph,
             maxSpeedMph = current.maxSpeedMph.coerceAtLeast(avgSpeedMph),
             elevationGainFeet = current.elevationGainFeet,
-            routePoints = current.points,
-            samples = current.samples,
+            routePoints = capturedPoints,
+            samples = capturedSamples,
             syncedToHealthConnect = false,
             healthConnectSessionId = null,
             avgCadenceRpm = current.avgCadenceRpm,
@@ -1228,6 +1271,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setAutoSyncToHealthConnect(enabled: Boolean) {
+        appPreferences.autoSyncToHealthConnect = enabled
         _uiState.update { it.copy(autoSyncToHealthConnect = enabled) }
     }
 
@@ -1312,6 +1356,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             null
         }
 
+        var updatedRideSnapshot: ActiveRideMetrics? = null
         _uiState.update { state ->
             val current = state.activeRide
             if (current.status != RideRecordingStatus.RECORDING) return@update state
@@ -1340,18 +1385,19 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            state.copy(
-                activeRide = current.copy(
-                    distanceMiles = nextDistance,
-                    currentSpeedMph = nextSpeedMph,
-                    maxSpeedMph = nextMaxSpeedMph,
-                    currentCadenceRpm = nextCadence,
-                    avgCadenceRpm = nextAvgCadence,
-                    maxCadenceRpm = nextMaxCadence,
-                    sensorSourceLabel = reading.sensorName
-                )
+            val updatedRide = current.copy(
+                distanceMiles = nextDistance,
+                currentSpeedMph = nextSpeedMph,
+                maxSpeedMph = nextMaxSpeedMph,
+                currentCadenceRpm = nextCadence,
+                avgCadenceRpm = nextAvgCadence,
+                maxCadenceRpm = nextMaxCadence,
+                sensorSourceLabel = reading.sensorName
             )
+            updatedRideSnapshot = updatedRide
+            state.copy(activeRide = updatedRide)
         }
+        updatedRideSnapshot?.let { maybeSpeakDistanceMilestone(it) }
     }
 
     private fun processBleHrReading(reading: HrSensorReading) {
@@ -1392,12 +1438,15 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             null
         }
 
+        var gpxTransition: Pair<GpxNavigationState, GpxNavigationState>? = null
+        var updatedRideSnapshot: ActiveRideMetrics? = null
+
         _uiState.update { state ->
             val current = state.activeRide
             if (current.status != RideRecordingStatus.RECORDING) return@update state
 
             val newPoint = GeoPoint(location.latitude, location.longitude)
-            val prevPoint = current.points.lastOrNull()
+            val prevPoint = activeRidePoints.lastOrNull() ?: current.points.lastOrNull()
             val segmentMiles = if (prevPoint != null) {
                 GeoUtils.haversineMiles(prevPoint.lat, prevPoint.lon, newPoint.lat, newPoint.lon)
             } else {
@@ -1453,73 +1502,77 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 current.currentAltitudeFeet
             }
 
-            val nextGpxNav = if (state.gpxNavigation.isNavigating && state.gpxNavigation.track != null) {
-                val heading = if (location.hasBearing()) location.bearing else state.gpxNavigation.userHeadingDegrees
+            val prevGpxNav = state.gpxNavigation
+            val nextGpxNav = if (prevGpxNav.isNavigating && prevGpxNav.track != null) {
+                val heading = if (location.hasBearing()) location.bearing else prevGpxNav.userHeadingDegrees
                 GpxNavigationEngine.updateNavigationProgress(
-                    previousState = state.gpxNavigation,
-                    track = state.gpxNavigation.track,
+                    previousState = prevGpxNav,
+                    track = prevGpxNav.track,
                     userLat = location.latitude,
                     userLon = location.longitude,
                     userHeadingDegrees = heading
-                )
+                ).also { updated ->
+                    gpxTransition = prevGpxNav to updated
+                }
             } else {
-                state.gpxNavigation
+                prevGpxNav
             }
+
+            activeRideSamples.add(sample)
+            val updatedPoints = if (shouldAppendPoint) {
+                activeRidePoints.add(newPoint)
+                activeRidePoints.toList()
+            } else {
+                current.points
+            }
+
+            val updatedRide = current.copy(
+                distanceMiles = updatedDistance,
+                currentSpeedMph = speedMph,
+                maxSpeedMph = maxOf(current.maxSpeedMph, speedMph),
+                elevationGainFeet = updatedElevGainFeet,
+                currentAltitudeFeet = currentAltFeet,
+                points = updatedPoints
+            )
+            updatedRideSnapshot = updatedRide
 
             state.copy(
                 gpxNavigation = nextGpxNav,
-                activeRide = current.copy(
-                    distanceMiles = updatedDistance,
-                    currentSpeedMph = speedMph,
-                    maxSpeedMph = maxOf(current.maxSpeedMph, speedMph),
-                    elevationGainFeet = updatedElevGainFeet,
-                    currentAltitudeFeet = currentAltFeet,
-                    points = if (shouldAppendPoint) current.points + newPoint else current.points,
-                    samples = current.samples + sample
-                )
+                activeRide = updatedRide
             )
+        }
+
+        updatedRideSnapshot?.let { maybeSpeakDistanceMilestone(it) }
+        gpxTransition?.let { (prev, next) -> maybeSpeakOffRouteAlert(prev, next) }
+    }
+
+    private fun maybeSpeakOffRouteAlert(
+        previousState: GpxNavigationState,
+        newState: GpxNavigationState
+    ) {
+        val currentState = _uiState.value
+        val cue = voiceCueAlertEngine.evaluateGpxOffRouteCue(
+            isEnabled = currentState.voiceCuesEnabled,
+            previousState = previousState,
+            newState = newState,
+            unit = currentState.measurementUnit
+        )
+        if (cue != null) {
+            voiceCueSpeaker.speak(cue, interrupt = true)
         }
     }
 
-    private fun applyFiltersAndSort(
-        trails: List<Trail>,
-        query: String,
-        difficulty: TrailDifficulty?,
-        sortOrder: TrailSortOrder
-    ): List<Trail> {
-        val trimmedQuery = query.trim()
-        val filtered = trails.filter { trail ->
-            val matchesDiff = difficulty == null || trail.difficulty == difficulty
-            val matchesQuery = trimmedQuery.isEmpty() ||
-                trail.name.contains(trimmedQuery, ignoreCase = true) ||
-                trail.surface.contains(trimmedQuery, ignoreCase = true) ||
-                (trail.networkName?.contains(trimmedQuery, ignoreCase = true) == true) ||
-                (trail.operatorName?.contains(trimmedQuery, ignoreCase = true) == true)
-            matchesDiff && matchesQuery
-        }
-
-        return when (sortOrder) {
-            TrailSortOrder.CLOSEST -> filtered.sortedBy { it.distanceFromUserMiles }
-            TrailSortOrder.DIFFICULTY -> filtered.sortedWith(
-                compareBy<Trail> { it.difficulty.rank }.thenBy { it.distanceFromUserMiles }
-            )
-            TrailSortOrder.LENGTH -> filtered.sortedByDescending { it.lengthMiles ?: -1.0 }
-            TrailSortOrder.NAME -> filtered.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
-        }
-    }
-
-    private fun isLocationSavedOffline(
-        location: LocationPlace?,
-        regions: List<OfflineRegion>
-    ): Boolean {
-        if (location == null) return false
-        return regions.any { region ->
-            GeoUtils.haversineMiles(
-                location.lat,
-                location.lon,
-                region.centerLat,
-                region.centerLon
-            ) <= 8.0
+    private fun maybeSpeakDistanceMilestone(rideMetrics: ActiveRideMetrics) {
+        val currentState = _uiState.value
+        val cue = voiceCueAlertEngine.evaluateDistanceMilestoneCue(
+            isEnabled = currentState.voiceCuesEnabled,
+            rideStatus = rideMetrics.status,
+            distanceMiles = rideMetrics.distanceMiles,
+            elapsedSeconds = rideMetrics.elapsedSeconds,
+            unit = currentState.measurementUnit
+        )
+        if (cue != null) {
+            voiceCueSpeaker.speak(cue, interrupt = false)
         }
     }
 
@@ -1529,14 +1582,9 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         rideGpsJob?.cancel()
         gpxInitFixJob?.cancel()
         gpxNavGpsJob?.cancel()
+        trailScanJob?.cancel()
         detailLoadJob?.cancel()
+        voiceCueSpeaker.release()
         bleSensorManager.release()
-    }
-
-    companion object {
-        private const val KEY_MEASUREMENT_UNIT = "measurement_unit"
-        private const val KEY_LOAD_OFFLINE_BY_DEFAULT = "load_offline_by_default"
-        private const val KEY_DEFAULT_OFFLINE_REGION_ID = "default_offline_region_id"
-        private const val KEY_OPEN_RECORDING_SCREEN_ON_START = "open_recording_screen_on_start"
     }
 }

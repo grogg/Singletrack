@@ -26,6 +26,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Navigation
@@ -60,6 +62,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -94,7 +97,9 @@ fun LiveRideCockpitScreen(
     onFinishRide: () -> Unit,
     onDiscardRide: () -> Unit,
     modifier: Modifier = Modifier,
-    gpxNavigation: GpxNavigationState = GpxNavigationState()
+    gpxNavigation: GpxNavigationState = GpxNavigationState(),
+    voiceCuesEnabled: Boolean = true,
+    onToggleVoiceCues: (Boolean) -> Unit = {}
 ) {
     BackHandler(onBack = onClose)
 
@@ -241,14 +246,14 @@ fun LiveRideCockpitScreen(
                         .widthIn(max = 760.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                    Box(
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         IconButton(
                             onClick = onClose,
-                            modifier = Modifier.testTag("cockpit_close_button")
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .testTag("cockpit_close_button")
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -258,15 +263,19 @@ fun LiveRideCockpitScreen(
                         }
 
                         Column(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(horizontal = 96.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = activeRide.targetTrailName ?: "Ride Computer",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = Color.White,
+                                textAlign = TextAlign.Center,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("cockpit_header_title")
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Surface(
@@ -275,7 +284,8 @@ fun LiveRideCockpitScreen(
                                     RideRecordingStatus.RECORDING -> Terracotta
                                     RideRecordingStatus.PAUSED -> Color.White.copy(alpha = 0.22f)
                                     RideRecordingStatus.IDLE -> Color.White.copy(alpha = 0.16f)
-                                }
+                                },
+                                modifier = Modifier.testTag("cockpit_status_pill")
                             ) {
                                 Text(
                                     text = when (activeRide.status) {
@@ -290,15 +300,43 @@ fun LiveRideCockpitScreen(
                             }
                         }
 
-                        IconButton(
-                            onClick = onOpenSettings,
-                            modifier = Modifier.testTag("cockpit_settings_button")
+                        Row(
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Settings,
-                                contentDescription = "Settings and Bluetooth sensors",
-                                tint = Color.White
-                            )
+                            IconButton(
+                                onClick = { onToggleVoiceCues(!voiceCuesEnabled) },
+                                modifier = Modifier.testTag("cockpit_voice_cues_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (voiceCuesEnabled) {
+                                        Icons.AutoMirrored.Filled.VolumeUp
+                                    } else {
+                                        Icons.AutoMirrored.Filled.VolumeOff
+                                    },
+                                    contentDescription = if (voiceCuesEnabled) {
+                                        "Mute spoken audio cues"
+                                    } else {
+                                        "Enable spoken audio cues"
+                                    },
+                                    tint = if (voiceCuesEnabled) {
+                                        Color.White
+                                    } else {
+                                        Color.White.copy(alpha = 0.55f)
+                                    }
+                                )
+                            }
+
+                            IconButton(
+                                onClick = onOpenSettings,
+                                modifier = Modifier.testTag("cockpit_settings_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Settings,
+                                    contentDescription = "Settings and Bluetooth sensors",
+                                    tint = Color.White
+                                )
+                            }
                         }
                     }
 

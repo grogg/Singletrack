@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.CheckCircle
@@ -44,18 +46,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
 import com.example.domain.model.ActiveRideMetrics
 import com.example.domain.model.BleConnectionStatus
@@ -76,17 +74,12 @@ fun RideScreen(
     measurementUnit: MeasurementUnit,
     bleSensorState: BleSensorUiState,
     healthConnectStatus: HealthConnectStatus,
-    autoSyncEnabled: Boolean,
     syncingRideId: String?,
     hasLocationPermission: Boolean,
     onOpenSettings: () -> Unit,
     onOpenRecordingScreen: () -> Unit,
     onRequestLocationPermission: () -> Unit,
     onConnectHealthConnect: () -> Unit,
-    onInstallHealthConnect: () -> Unit,
-    onOpenHealthConnectSettings: () -> Unit,
-    onOpenGoogleFit: () -> Unit,
-    onToggleAutoSync: (Boolean) -> Unit,
     onStartRide: () -> Unit,
     onPauseRide: () -> Unit,
     onResumeRide: () -> Unit,
@@ -107,12 +100,10 @@ fun RideScreen(
     onClearGpxTrack: () -> Unit = {},
     onOpenGpxFullScreenMap: () -> Unit = {},
     onToggleGpxFollowLocation: () -> Unit = {},
-    onDisableGpxFollowLocation: () -> Unit = {}
+    onDisableGpxFollowLocation: () -> Unit = {},
+    voiceCuesEnabled: Boolean = true,
+    onToggleVoiceCues: (Boolean) -> Unit = {}
 ) {
-    val context = LocalContext.current
-    val hasGoogleFitInstalled = remember(context) {
-        context.packageManager.getLaunchIntentForPackage("com.google.android.apps.fitness") != null
-    }
 
     LazyColumn(
         modifier = modifier
@@ -134,9 +125,11 @@ fun RideScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Ride Tracker & Fit Sync",
+                        text = "Ride Tracker",
                         style = MaterialTheme.typography.headlineMedium,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("ride_screen_title")
                     )
                     IconButton(
                         onClick = onOpenSettings,
@@ -154,133 +147,6 @@ fun RideScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-        }
-
-        // Health Connect / Google Fit Integration Card
-        item(key = "health_connect_card") {
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (healthConnectStatus.permissionsGranted) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    }
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (healthConnectStatus.permissionsGranted) {
-                                Icons.Filled.CheckCircle
-                            } else {
-                                Icons.Filled.Favorite
-                            },
-                            contentDescription = null,
-                            tint = if (healthConnectStatus.permissionsGranted) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.secondary
-                            }
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = when {
-                                    healthConnectStatus.permissionsGranted ->
-                                        "Health Connect Active (Google Fit Sync)"
-                                    healthConnectStatus.availability == HealthConnectAvailability.UPDATE_REQUIRED ->
-                                        "Health Connect Update Required"
-                                    healthConnectStatus.availability == HealthConnectAvailability.UNAVAILABLE ->
-                                        "Health Connect Unavailable"
-                                    else -> "Sync Rides with Google Fit"
-                                },
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Text(
-                                text = when {
-                                    healthConnectStatus.permissionsGranted ->
-                                        "Finished rides write biking sessions, GPS routes, distance, and speed to Health Connect for Google Fit."
-                                    healthConnectStatus.availability == HealthConnectAvailability.UPDATE_REQUIRED ->
-                                        "Install or update Health Connect from Google Play to sync rides with Google Fit."
-                                    healthConnectStatus.availability == HealthConnectAvailability.UNAVAILABLE ->
-                                        "Rides are saved locally on-device and can be exported to GPX anytime."
-                                    else ->
-                                        "Grant Health Connect permissions so Google Fit automatically displays your recorded MTB rides."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    when {
-                        healthConnectStatus.permissionsGranted -> {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Auto-sync finished rides",
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Switch(
-                                    checked = autoSyncEnabled,
-                                    onCheckedChange = onToggleAutoSync,
-                                    modifier = Modifier.testTag("auto_sync_switch")
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    onClick = onOpenHealthConnectSettings,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Health Connect")
-                                }
-                                if (hasGoogleFitInstalled) {
-                                    FilledTonalButton(
-                                        onClick = onOpenGoogleFit,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Text("Open Google Fit")
-                                    }
-                                }
-                            }
-                        }
-
-                        healthConnectStatus.availability == HealthConnectAvailability.AVAILABLE -> {
-                            Button(
-                                onClick = onConnectHealthConnect,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("connect_health_connect_button")
-                            ) {
-                                Icon(Icons.Filled.Sync, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Connect Health Connect for Google Fit")
-                            }
-                        }
-
-                        healthConnectStatus.availability == HealthConnectAvailability.UPDATE_REQUIRED -> {
-                            Button(
-                                onClick = onInstallHealthConnect,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Install / Update Health Connect")
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -305,18 +171,45 @@ fun RideScreen(
                             style = MaterialTheme.typography.titleLarge,
                             modifier = Modifier.weight(1f)
                         )
-                        Text(
-                            text = when (activeRide.status) {
-                                RideRecordingStatus.IDLE -> "READY"
-                                RideRecordingStatus.RECORDING -> "REC"
-                                RideRecordingStatus.PAUSED -> "PAUSED"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = when (activeRide.status) {
-                                RideRecordingStatus.RECORDING -> MaterialTheme.colorScheme.secondary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(
+                                onClick = { onToggleVoiceCues(!voiceCuesEnabled) },
+                                modifier = Modifier.testTag("ride_voice_cues_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (voiceCuesEnabled) {
+                                        Icons.AutoMirrored.Filled.VolumeUp
+                                    } else {
+                                        Icons.AutoMirrored.Filled.VolumeOff
+                                    },
+                                    contentDescription = if (voiceCuesEnabled) {
+                                        "Mute spoken ride audio cues"
+                                    } else {
+                                        "Enable spoken ride audio cues"
+                                    },
+                                    tint = if (voiceCuesEnabled) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
                             }
-                        )
+                            Text(
+                                text = when (activeRide.status) {
+                                    RideRecordingStatus.IDLE -> "READY"
+                                    RideRecordingStatus.RECORDING -> "REC"
+                                    RideRecordingStatus.PAUSED -> "PAUSED"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = when (activeRide.status) {
+                                    RideRecordingStatus.RECORDING -> MaterialTheme.colorScheme.secondary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
                     }
 
                     // Bluetooth Cycling & Heart Rate Sensors Banner
@@ -634,7 +527,9 @@ fun RideScreen(
                 onClearTrack = onClearGpxTrack,
                 onOpenFullScreenMap = onOpenGpxFullScreenMap,
                 onToggleFollowLocation = onToggleGpxFollowLocation,
-                onDisableFollowLocation = onDisableGpxFollowLocation
+                onDisableFollowLocation = onDisableGpxFollowLocation,
+                voiceCuesEnabled = voiceCuesEnabled,
+                onToggleVoiceCues = onToggleVoiceCues
             )
         }
     }

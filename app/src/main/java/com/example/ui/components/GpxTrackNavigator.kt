@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
@@ -60,7 +62,9 @@ fun GpxTrackNavigatorSection(
     onOpenFullScreenMap: () -> Unit,
     onToggleFollowLocation: () -> Unit,
     onDisableFollowLocation: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    voiceCuesEnabled: Boolean = true,
+    onToggleVoiceCues: (Boolean) -> Unit = {}
 ) {
     val track = gpxNavigation.track
 
@@ -98,15 +102,40 @@ fun GpxTrackNavigatorSection(
                     )
                 }
 
-                if (track != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
-                        onClick = onClearTrack,
-                        modifier = Modifier.testTag("gpx_clear_track_button")
+                        onClick = { onToggleVoiceCues(!voiceCuesEnabled) },
+                        modifier = Modifier.testTag("gpx_voice_cues_button")
                     ) {
                         Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "Clear loaded GPX track"
+                            imageVector = if (voiceCuesEnabled) {
+                                Icons.AutoMirrored.Filled.VolumeUp
+                            } else {
+                                Icons.AutoMirrored.Filled.VolumeOff
+                            },
+                            contentDescription = if (voiceCuesEnabled) {
+                                "Mute off-route voice alerts"
+                            } else {
+                                "Enable off-route voice alerts"
+                            },
+                            tint = if (voiceCuesEnabled) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
+                    }
+
+                    if (track != null) {
+                        IconButton(
+                            onClick = onClearTrack,
+                            modifier = Modifier.testTag("gpx_clear_track_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Clear loaded GPX track"
+                            )
+                        }
                     }
                 }
             }

@@ -182,6 +182,7 @@ fun SingletrackApp(
     LaunchedEffect(showSettingsDialog) {
         if (showSettingsDialog) {
             viewModel.refreshBleCapabilities()
+            viewModel.refreshHealthConnectStatus()
         }
     }
 
@@ -387,7 +388,6 @@ fun SingletrackApp(
                             measurementUnit = state.measurementUnit,
                             bleSensorState = state.bleSensorState,
                             healthConnectStatus = state.healthConnectStatus,
-                            autoSyncEnabled = state.autoSyncToHealthConnect,
                             syncingRideId = state.syncingRideId,
                             hasLocationPermission = state.hasLocationPermission,
                             onOpenSettings = { showSettingsDialog = true },
@@ -398,26 +398,6 @@ fun SingletrackApp(
                                     HealthConnectSyncManager.REQUIRED_PERMISSIONS
                                 )
                             },
-                            onInstallHealthConnect = {
-                                runCatching {
-                                    context.startActivity(
-                                        viewModel.healthConnectSyncManager.buildInstallHealthConnectIntent()
-                                    )
-                                }
-                            },
-                            onOpenHealthConnectSettings = {
-                                runCatching {
-                                    context.startActivity(
-                                        viewModel.healthConnectSyncManager.buildOpenHealthConnectSettingsIntent()
-                                    )
-                                }
-                            },
-                            onOpenGoogleFit = {
-                                viewModel.healthConnectSyncManager.buildOpenGoogleFitIntent()?.let {
-                                    context.startActivity(it)
-                                }
-                            },
-                            onToggleAutoSync = viewModel::setAutoSyncToHealthConnect,
                             onStartRide = { viewModel.startRide() },
                             onPauseRide = viewModel::pauseRide,
                             onResumeRide = viewModel::resumeRide,
@@ -436,6 +416,8 @@ fun SingletrackApp(
                             onOpenGpxFullScreenMap = viewModel::openGpxFullScreenMap,
                             onToggleGpxFollowLocation = viewModel::toggleGpxFollowLocation,
                             onDisableGpxFollowLocation = viewModel::disableGpxFollowLocation,
+                            voiceCuesEnabled = state.voiceCuesEnabled,
+                            onToggleVoiceCues = viewModel::setVoiceCuesEnabled,
                             modifier = paneModifier,
                             topInset = topInset,
                             bottomInset = bottomInset
@@ -633,6 +615,8 @@ fun SingletrackApp(
                 onFinishRide = viewModel::finishAndSaveRide,
                 onDiscardRide = viewModel::discardRide,
                 gpxNavigation = state.gpxNavigation,
+                voiceCuesEnabled = state.voiceCuesEnabled,
+                onToggleVoiceCues = viewModel::setVoiceCuesEnabled,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -730,6 +714,8 @@ fun SingletrackApp(
             onSelectDefaultOfflineRegion = viewModel::setDefaultOfflineRegion,
             openRecordingScreenOnStart = state.openRecordingScreenOnStart,
             onToggleOpenRecordingScreenOnStart = viewModel::setOpenRecordingScreenOnStart,
+            voiceCuesEnabled = state.voiceCuesEnabled,
+            onToggleVoiceCues = viewModel::setVoiceCuesEnabled,
             bleSensorState = state.bleSensorState,
             onRequestBleScan = requestBleScan,
             onStopBleScan = viewModel::stopBleSensorScan,
@@ -742,6 +728,33 @@ fun SingletrackApp(
             onPairBleHrSensor = viewModel::pairBleHrSensor,
             onConnectPairedBleHr = connectPairedBleHr,
             onForgetBleHrSensor = viewModel::forgetBleHrSensor,
+            healthConnectStatus = state.healthConnectStatus,
+            autoSyncEnabled = state.autoSyncToHealthConnect,
+            onConnectHealthConnect = {
+                healthConnectPermissionLauncher.launch(
+                    HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                )
+            },
+            onInstallHealthConnect = {
+                runCatching {
+                    context.startActivity(
+                        viewModel.healthConnectSyncManager.buildInstallHealthConnectIntent()
+                    )
+                }
+            },
+            onOpenHealthConnectSettings = {
+                runCatching {
+                    context.startActivity(
+                        viewModel.healthConnectSyncManager.buildOpenHealthConnectSettingsIntent()
+                    )
+                }
+            },
+            onOpenGoogleFit = {
+                viewModel.healthConnectSyncManager.buildOpenGoogleFitIntent()?.let {
+                    context.startActivity(it)
+                }
+            },
+            onToggleAutoSync = viewModel::setAutoSyncToHealthConnect,
             onDismiss = {
                 viewModel.stopBleSensorScan()
                 viewModel.stopBleHrScan()

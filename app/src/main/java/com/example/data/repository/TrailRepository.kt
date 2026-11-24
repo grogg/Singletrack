@@ -79,6 +79,8 @@ class TrailRepository(
                     usedSingletrackFallback = usedFallback
                 )
             )
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (networkError: Exception) {
             val matchingRegion = findMatchingOfflineRegion(lat, lon)
             if (matchingRegion != null) {
@@ -111,6 +113,8 @@ class TrailRepository(
             val response = executeOverpassWithFallback(query)
             val element = response.elements.firstOrNull() ?: return@withContext emptyList()
             GeoUtils.extractGeometry(element)
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             emptyList()
         }
@@ -142,6 +146,8 @@ class TrailRepository(
             val lons = sampled.joinToString(",") { String.format(Locale.US, "%.5f", it.point.lon) }
             val resp = ElevationClient.service.getOpenMeteoElevations(latitudes = lats, longitudes = lons)
             GeoUtils.buildElevationProfile(sampled, resp.elevation, sourceLabel = "DEM Elevation Profile")
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             null
         } ?: try {
@@ -154,6 +160,8 @@ class TrailRepository(
                 resp.results.map { it.elevation },
                 sourceLabel = "SRTM 30m Elevation Profile"
             )
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             null
         }
@@ -181,6 +189,8 @@ class TrailRepository(
             var elements = try {
                 val fullQuery = buildPrimaryMtbQuery(centerLat, centerLon, includeGeometry = true)
                 executeOverpassWithFallback(fullQuery).elements
+            } catch (ce: CancellationException) {
+                throw ce
             } catch (_: Exception) {
                 hasFullGeometry = false
                 val lightQuery = buildPrimaryMtbQuery(centerLat, centerLon, includeGeometry = false)
@@ -191,6 +201,8 @@ class TrailRepository(
                 val fallbackQuery = buildSingletrackFallbackQuery(centerLat, centerLon, includeGeometry = true)
                 elements = try {
                     executeOverpassWithFallback(fallbackQuery).elements
+                } catch (ce: CancellationException) {
+                    throw ce
                 } catch (_: Exception) {
                     hasFullGeometry = false
                     val lightFallback = buildSingletrackFallbackQuery(centerLat, centerLon, includeGeometry = false)
@@ -258,6 +270,8 @@ class TrailRepository(
 
             offlineTrailDao.replaceRegionWithTrails(regionEntity, entities)
             Result.success(regionEntity.toDomain())
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -346,6 +360,8 @@ class TrailRepository(
                 LocationPlace(name = cleanName, lat = lat, lon = lon, isCurrentGps = false)
             }
             Result.success(mapped)
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -361,6 +377,8 @@ class TrailRepository(
     ): List<OverpassElement> {
         return try {
             executeOverpassWithFallback(geomQuery).elements
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             executeOverpassWithFallback(lightQuery).elements
         }

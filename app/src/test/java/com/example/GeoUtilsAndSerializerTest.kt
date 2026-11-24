@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.audio.VoiceCueAlertEngine
 import com.example.data.bluetooth.CscMeasurementParser
 import com.example.data.bluetooth.CscParserState
 import com.example.data.bluetooth.HrMeasurementParser
@@ -21,6 +22,7 @@ import com.example.domain.model.GpxRouteStatus
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.PhysicalEffortRating
 import com.example.domain.model.RecordedRide
+import com.example.domain.model.RideRecordingStatus
 import com.example.domain.model.RideSample
 import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailElevationProfile
@@ -522,5 +524,180 @@ class GeoUtilsAndSerializerTest {
             userLon = -109.5250
         )
         assertEquals(GpxRouteStatus.ON_TRACK, denseState.routeStatus)
+    }
+
+    @Test
+    fun voiceCueAlertEngine_offRouteAlertsRespectCooldownAndFormatting() {
+        val engine = VoiceCueAlertEngine()
+        val onTrack = GpxNavigationState(
+            isNavigating = true,
+            routeStatus = GpxRouteStatus.ON_TRACK,
+            offRouteFeet = 20.0,
+            bearingCardinal = "N"
+        )
+        val offRoute = GpxNavigationState(
+            isNavigating = true,
+            routeStatus = GpxRouteStatus.OFF_ROUTE,
+            offRouteFeet = 240.0,
+            bearingCardinal = "NE"
+        )
+
+        // Transition ON_TRACK -> OFF_ROUTE fires immediately
+        val firstCue = engine.evaluateGpxOffRouteCue(
+            isEnabled = true,
+            previousState = onTrack,
+            newState = offRoute,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 10_000L
+        )
+        assertEquals("Off route. 240 feet from trail. Head northeast.", firstCue)
+
+        // Staying OFF_ROUTE within 45s does not spam
+        assertNull(
+            engine.evaluateGpxOffRouteCue(
+                isEnabled = true,
+                previousState = offRoute,
+                newState = offRoute,
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 30_000L
+            )
+        )
+
+        // Repeat reminder after 45s while still off route uses Metric meters when requested
+        val repeatMetricCue = engine.evaluateGpxOffRouteCue(
+            isEnabled = true,
+            previousState = offRoute,
+            newState = offRoute.copy(offRouteFeet = 328.084, bearingCardinal = "W"),
+            unit = MeasurementUnit.METRIC,
+            nowMillis = 56_000L
+        )
+        assertEquals("Off route. 100 meters from trail. Head west.", repeatMetricCue)
+
+        // Re-entering OFF_ROUTE too fast (< 15s cooldown) is suppressed; after >= 15s it fires
+        assertNull(
+            engine.evaluateGpxOffRouteCue(
+                isEnabled = true,
+                previousState = offRoute,
+                newState = onTrack,
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 60_000L
+            )
+        )
+        assertNull(
+            engine.evaluateGpxOffRouteCue(
+                isEnabled = true,
+                previousState = onTrack,
+                newState = offRoute,
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 65_000L
+            )
+        )
+        assertNotNull(
+            engine.evaluateGpxOffRouteCue(
+                isEnabled = true,
+                previousState = onTrack,
+                newState = offRoute,
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 72_000L
+            )
+        )
+
+        // Disabled audio cues suppress speech
+        engine.resetGpxState()
+        assertNull(
+            engine.evaluateGpxOffRouteCue(
+                isEnabled = false,
+                previousState = onTrack,
+                newState = offRoute,
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 100_000L
+            )
+        )
+    }
+
+    @Test
+    fun voiceCueAlertEngine_rideMilestonesFirePerMileAndKilometerCompleted() {
+        val engine = VoiceCueAlertEngine()
+
+        // Below 1 mile -> no cue
+        assertNull(
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 0.99,
+                elapsedSeconds = 290L,
+                unit = MeasurementUnit.IMPERIAL
+            )
+        )
+
+        // Crossing 1.0 mi -> 1 mile cue
+        assertEquals(
+            "1 mile completed, time 5 minutes.",
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 1.02,
+                elapsedSeconds = 300L,
+                unit = MeasurementUnit.IMPERIAL
+            )
+        )
+
+        // Same mile does not re-fire
+        assertNull(
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 1.85,
+                elapsedSeconds = 510L,
+                unit = MeasurementUnit.IMPERIAL
+            )
+        )
+
+        // Crossing 2.0 mi -> 2 miles cue
+        assertEquals(
+            "2 miles completed, time 10 minutes 15 seconds.",
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 2.00,
+                elapsedSeconds = 615L,
+                unit = MeasurementUnit.IMPERIAL
+            )
+        )
+
+        // Switching to metric mid-ride syncs baseline (2.00 mi = 3.218 km -> baseline 3 km)
+        engine.syncMilestoneBaseline(distanceMiles = 2.00, unit = MeasurementUnit.METRIC)
+        assertNull(
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 2.40, // 3.86 km
+                elapsedSeconds = 700L,
+                unit = MeasurementUnit.METRIC
+            )
+        )
+        assertEquals(
+            "4 kilometers completed, time 12 minutes 5 seconds.",
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 2.50, // 4.02 km
+                elapsedSeconds = 725L,
+                unit = MeasurementUnit.METRIC
+            )
+        )
+
+        // Fresh ride in metric starts at 1 km
+        engine.resetRideMilestones()
+        assertEquals(
+            "1 kilometer completed, time 2 minutes 30 seconds.",
+            engine.evaluateDistanceMilestoneCue(
+                isEnabled = true,
+                rideStatus = RideRecordingStatus.RECORDING,
+                distanceMiles = 0.63, // 1.01 km
+                elapsedSeconds = 150L,
+                unit = MeasurementUnit.METRIC
+            )
+        )
     }
 }

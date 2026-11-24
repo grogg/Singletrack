@@ -8,10 +8,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
@@ -20,6 +23,7 @@ import com.example.data.export.GpxExporter
 import com.example.data.export.GpxTrackParser
 import com.example.data.health.HealthConnectAvailability
 import com.example.data.health.HealthConnectStatus
+import com.example.data.local.AppPreferences
 import com.example.data.local.GpxTrackStorage
 import com.example.data.remote.SingletrackImageLoader
 import com.example.data.repository.GpxNavigationEngine
@@ -33,8 +37,11 @@ import com.example.domain.model.RecordedRide
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.ui.components.TrailNavigationHelper
+import com.example.ui.components.UnitSettingsDialog
+import com.example.ui.screens.LiveRideCockpitScreen
 import com.example.ui.screens.RideScreen
 import com.example.ui.theme.SingletrackTheme
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -228,6 +235,7 @@ class SingletrackAppRobolectricTest {
         var selectClicked = false
         var navigateClicked = false
         var reverseClicked = false
+        val toggledAudioValues = mutableListOf<Boolean>()
 
         val track = GpxTrackParser.buildTrack(
             id = "ui-track-1",
@@ -251,17 +259,12 @@ class SingletrackAppRobolectricTest {
                         availability = HealthConnectAvailability.UNAVAILABLE,
                         permissionsGranted = false
                     ),
-                    autoSyncEnabled = false,
                     syncingRideId = null,
                     hasLocationPermission = true,
                     onOpenSettings = {},
                     onOpenRecordingScreen = {},
                     onRequestLocationPermission = {},
                     onConnectHealthConnect = {},
-                    onInstallHealthConnect = {},
-                    onOpenHealthConnectSettings = {},
-                    onOpenGoogleFit = {},
-                    onToggleAutoSync = {},
                     onStartRide = {},
                     onPauseRide = {},
                     onResumeRide = {},
@@ -274,17 +277,29 @@ class SingletrackAppRobolectricTest {
                     gpxNavigation = idleNavState,
                     onSelectGpxFile = { selectClicked = true },
                     onStartGpxNavigation = { navigateClicked = true },
-                    onReverseGpxTrack = { reverseClicked = true }
+                    onReverseGpxTrack = { reverseClicked = true },
+                    voiceCuesEnabled = true,
+                    onToggleVoiceCues = { enabled -> toggledAudioValues.add(enabled) }
                 )
             }
         }
 
+        composeRule.onNodeWithTag("ride_screen_title")
+            .assertIsDisplayed()
+            .assertTextEquals("Ride Tracker")
+        composeRule.onNodeWithText("Sync Rides with Google Fit").assertDoesNotExist()
+        composeRule.onNodeWithText("Health Connect Unavailable").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("ride_voice_cues_button").performClick()
+
         composeRule.onNodeWithTag("ride_screen_list")
             .performScrollToNode(hasTestTag("gpx_track_navigator_section"))
+        composeRule.onNodeWithTag("gpx_track_navigator_section").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_voice_cues_button").assertIsDisplayed().performClick()
+
         composeRule.onNodeWithTag("ride_screen_list")
             .performTouchInput { swipeUp() }
 
-        composeRule.onNodeWithTag("gpx_track_navigator_section").assertIsDisplayed()
         composeRule.onNodeWithTag("gpx_live_guidance_panel").assertIsDisplayed()
         composeRule.onNodeWithTag("gpx_toggle_navigation_button").assertIsDisplayed().performClick()
         composeRule.onNodeWithTag("gpx_reverse_track_button").performClick()
@@ -294,5 +309,104 @@ class SingletrackAppRobolectricTest {
         assertTrue(navigateClicked)
         assertTrue(reverseClicked)
         assertTrue(selectClicked)
+        assertEquals(listOf(false, false), toggledAudioValues)
+    }
+
+    @Test
+    fun `settings dialog displays google fit sync above about section and handles auto sync toggle`() {
+        val toggledAutoSync = mutableListOf<Boolean>()
+
+        composeRule.setContent {
+            SingletrackTheme {
+                UnitSettingsDialog(
+                    currentUnit = MeasurementUnit.IMPERIAL,
+                    onSelectUnit = {},
+                    healthConnectStatus = HealthConnectStatus(
+                        availability = HealthConnectAvailability.AVAILABLE,
+                        permissionsGranted = true
+                    ),
+                    autoSyncEnabled = false,
+                    onToggleAutoSync = { enabled -> toggledAutoSync.add(enabled) },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        val googleFitNode = composeRule.onNodeWithTag("settings_google_fit_section")
+        val aboutNode = composeRule.onNodeWithTag("settings_about_section")
+        googleFitNode.performScrollTo()
+        googleFitNode.assertIsDisplayed()
+
+        val googleFitY = googleFitNode.fetchSemanticsNode().positionInRoot.y
+        val aboutY = aboutNode.fetchSemanticsNode().positionInRoot.y
+        assertTrue(
+            "Expected Google Fit sync ($googleFitY) to appear above About ($aboutY)",
+            googleFitY < aboutY
+        )
+
+        aboutNode.performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("auto_sync_switch").performScrollTo().performClick()
+        assertEquals(listOf(true), toggledAutoSync)
+    }
+
+    @Test
+    fun `app preferences persist settings including auto sync and voice cues`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = AppPreferences(context)
+        prefs.measurementUnit = MeasurementUnit.METRIC
+        prefs.voiceCuesEnabled = false
+        prefs.autoSyncToHealthConnect = false
+        prefs.defaultOfflineRegionId = "region_moab"
+
+        val reloaded = AppPreferences(context)
+        assertEquals(MeasurementUnit.METRIC, reloaded.measurementUnit)
+        assertFalse(reloaded.voiceCuesEnabled)
+        assertFalse(reloaded.autoSyncToHealthConnect)
+        assertEquals("region_moab", reloaded.defaultOfflineRegionId)
+    }
+
+    @Test
+    fun `live ride cockpit centers Ride Computer and READY pill horizontally`() {
+        composeRule.setContent {
+            SingletrackTheme {
+                LiveRideCockpitScreen(
+                    activeRide = ActiveRideMetrics(),
+                    measurementUnit = MeasurementUnit.IMPERIAL,
+                    bleSensorState = BleSensorUiState(),
+                    hasLocationPermission = true,
+                    onClose = {},
+                    onOpenSettings = {},
+                    onRequestLocationPermission = {},
+                    onStartRide = {},
+                    onPauseRide = {},
+                    onResumeRide = {},
+                    onFinishRide = {},
+                    onDiscardRide = {}
+                )
+            }
+        }
+
+        val titleBounds = composeRule.onNodeWithTag("cockpit_header_title")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val statusBounds = composeRule.onNodeWithTag("cockpit_status_pill")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+        val elapsedBounds = composeRule.onNodeWithTag("cockpit_elapsed_time")
+            .assertIsDisplayed()
+            .fetchSemanticsNode().boundsInRoot
+
+        val elapsedCenterX = (elapsedBounds.left + elapsedBounds.right) / 2f
+        val titleCenterX = (titleBounds.left + titleBounds.right) / 2f
+        val statusCenterX = (statusBounds.left + statusBounds.right) / 2f
+
+        assertTrue(
+            "Expected title center ($titleCenterX) to match elapsed center ($elapsedCenterX)",
+            abs(titleCenterX - elapsedCenterX) < 2f
+        )
+        assertTrue(
+            "Expected status pill center ($statusCenterX) to match elapsed center ($elapsedCenterX)",
+            abs(statusCenterX - elapsedCenterX) < 2f
+        )
     }
 }

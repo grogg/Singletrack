@@ -12,8 +12,8 @@ android {
     applicationId = "com.aistudio.singletrack.mxbkqr"
     minSdk = 26
     targetSdk = 36
-    versionCode = 13
-    versionName = "13.0"
+    versionCode = 15
+    versionName = "15.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
