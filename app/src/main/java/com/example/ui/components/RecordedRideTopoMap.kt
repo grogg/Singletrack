@@ -237,14 +237,9 @@ fun RecordedRideTopoMap(
             }
 
             if (isFullScreen || zoom >= 12.5f) {
-                val badges = buildList {
-                    add(startBadgeLayout to startPt)
-                    if (routePoints.size >= 2) {
-                        add(finishBadgeLayout to endPt)
-                    }
-                }
-                badges.forEach { (measured, pt) ->
-                    drawMapLabelBadge(measured = measured, anchor = pt)
+                drawMapLabelBadge(measured = startBadgeLayout, anchor = startPt)
+                if (routePoints.size >= 2) {
+                    drawMapLabelBadge(measured = finishBadgeLayout, anchor = endPt)
                 }
             }
         }

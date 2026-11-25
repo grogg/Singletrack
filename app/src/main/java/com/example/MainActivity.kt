@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.health.connect.client.PermissionController
@@ -67,7 +68,7 @@ import com.example.data.export.GpxExporter
 import com.example.data.health.HealthConnectSyncManager
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
-import com.example.domain.model.Trail
+import com.example.ui.viewmodel.MainUiState
 import com.example.ui.components.FormatUtils
 import com.example.ui.components.GpxNavigatorTopoMap
 import com.example.ui.components.LocationPickerSheet
@@ -380,84 +381,6 @@ fun SingletrackApp(
                         }
                     }
 
-                    @Composable
-                    fun RideMainPane(paneModifier: Modifier) {
-                        RideScreen(
-                            activeRide = state.activeRide,
-                            recordedRides = state.recordedRides,
-                            measurementUnit = state.measurementUnit,
-                            bleSensorState = state.bleSensorState,
-                            healthConnectStatus = state.healthConnectStatus,
-                            syncingRideId = state.syncingRideId,
-                            hasLocationPermission = state.hasLocationPermission,
-                            onOpenSettings = { showSettingsDialog = true },
-                            onOpenRecordingScreen = viewModel::openRecordingScreen,
-                            onRequestLocationPermission = requestLocationPermission,
-                            onConnectHealthConnect = {
-                                healthConnectPermissionLauncher.launch(
-                                    HealthConnectSyncManager.REQUIRED_PERMISSIONS
-                                )
-                            },
-                            onStartRide = { viewModel.startRide() },
-                            onPauseRide = viewModel::pauseRide,
-                            onResumeRide = viewModel::resumeRide,
-                            onFinishRide = viewModel::finishAndSaveRide,
-                            onDiscardRide = viewModel::discardRide,
-                            onOpenRideDetail = viewModel::openRideDetail,
-                            onShareRideGpx = shareRideGpx,
-                            onSyncRide = viewModel::syncRideToHealthConnect,
-                            onDeleteRide = viewModel::deleteRide,
-                            gpxNavigation = state.gpxNavigation,
-                            onSelectGpxFile = launchSelectGpxFile,
-                            onStartGpxNavigation = startOrRequestGpxNav,
-                            onStopGpxNavigation = viewModel::stopGpxNavigation,
-                            onReverseGpxTrack = viewModel::reverseGpxTrack,
-                            onClearGpxTrack = viewModel::clearGpxTrack,
-                            onOpenGpxFullScreenMap = viewModel::openGpxFullScreenMap,
-                            onToggleGpxFollowLocation = viewModel::toggleGpxFollowLocation,
-                            onDisableGpxFollowLocation = viewModel::disableGpxFollowLocation,
-                            voiceCuesEnabled = state.voiceCuesEnabled,
-                            onToggleVoiceCues = viewModel::setVoiceCuesEnabled,
-                            modifier = paneModifier,
-                            topInset = topInset,
-                            bottomInset = bottomInset
-                        )
-                    }
-
-                    @Composable
-                    fun RideDetailPane(
-                        ride: RecordedRide,
-                        showBack: Boolean,
-                        paneTopInset: androidx.compose.ui.unit.Dp,
-                        paneModifier: Modifier = Modifier
-                    ) {
-                        RideDetailScreen(
-                            ride = ride,
-                            measurementUnit = state.measurementUnit,
-                            isSyncing = state.syncingRideId == ride.id,
-                            canSyncHealthConnect = state.healthConnectStatus.permissionsGranted,
-                            showBackNavigation = showBack,
-                            onBack = viewModel::closeRideDetail,
-                            onOpenSettings = { showSettingsDialog = true },
-                            onExpandFullScreenMap = viewModel::openFullScreenRideMap,
-                            onShareGpx = shareRideGpx,
-                            onSaveGpxFile = saveRideGpxFile,
-                            onSyncHealthConnect = { target ->
-                                if (state.healthConnectStatus.permissionsGranted) {
-                                    viewModel.syncRideToHealthConnect(target)
-                                } else {
-                                    healthConnectPermissionLauncher.launch(
-                                        HealthConnectSyncManager.REQUIRED_PERMISSIONS
-                                    )
-                                }
-                            },
-                            onDeleteRide = viewModel::deleteRide,
-                            modifier = paneModifier,
-                            topInset = paneTopInset,
-                            bottomInset = bottomInset
-                        )
-                    }
-
                     when {
                         showCompactTrailDetail && selectedTrail != null -> {
                             TrailDetailScreen(
@@ -478,8 +401,19 @@ fun SingletrackApp(
                         showCompactRideDetail && selectedRide != null -> {
                             RideDetailPane(
                                 ride = selectedRide,
+                                state = state,
+                                viewModel = viewModel,
                                 showBack = true,
-                                paneTopInset = topInset
+                                onOpenSettings = { showSettingsDialog = true },
+                                onShareRideGpx = shareRideGpx,
+                                onSaveRideGpxFile = saveRideGpxFile,
+                                onRequestHealthConnect = {
+                                    healthConnectPermissionLauncher.launch(
+                                        HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                                    )
+                                },
+                                paneTopInset = topInset,
+                                bottomInset = bottomInset
                             )
                         }
 
@@ -580,19 +514,56 @@ fun SingletrackApp(
                         }
 
                         state.currentDestination == AppDestination.RIDE -> {
+                            val openSettings = { showSettingsDialog = true }
+                            val launchHcPermissions = {
+                                healthConnectPermissionLauncher.launch(
+                                    HealthConnectSyncManager.REQUIRED_PERMISSIONS
+                                )
+                            }
                             if (isExpanded && selectedRide != null) {
                                 Row(modifier = Modifier.fillMaxSize()) {
-                                    RideMainPane(paneModifier = Modifier.weight(1f))
+                                    RideMainPane(
+                                        state = state,
+                                        viewModel = viewModel,
+                                        onOpenSettings = openSettings,
+                                        onRequestLocationPermission = requestLocationPermission,
+                                        onConnectHealthConnect = launchHcPermissions,
+                                        onShareRideGpx = shareRideGpx,
+                                        onSelectGpxFile = launchSelectGpxFile,
+                                        onStartGpxNavigation = startOrRequestGpxNav,
+                                        topInset = topInset,
+                                        bottomInset = bottomInset,
+                                        paneModifier = Modifier.weight(1f)
+                                    )
                                     VerticalDivider()
                                     RideDetailPane(
                                         ride = selectedRide,
+                                        state = state,
+                                        viewModel = viewModel,
                                         showBack = false,
+                                        onOpenSettings = openSettings,
+                                        onShareRideGpx = shareRideGpx,
+                                        onSaveRideGpxFile = saveRideGpxFile,
+                                        onRequestHealthConnect = launchHcPermissions,
                                         paneTopInset = topInset,
+                                        bottomInset = bottomInset,
                                         paneModifier = Modifier.weight(1f)
                                     )
                                 }
                             } else {
-                                RideMainPane(paneModifier = Modifier.widthIn(max = 760.dp))
+                                RideMainPane(
+                                    state = state,
+                                    viewModel = viewModel,
+                                    onOpenSettings = openSettings,
+                                    onRequestLocationPermission = requestLocationPermission,
+                                    onConnectHealthConnect = launchHcPermissions,
+                                    onShareRideGpx = shareRideGpx,
+                                    onSelectGpxFile = launchSelectGpxFile,
+                                    onStartGpxNavigation = startOrRequestGpxNav,
+                                    topInset = topInset,
+                                    bottomInset = bottomInset,
+                                    paneModifier = Modifier.widthIn(max = 760.dp)
+                                )
                             }
                         }
                     }
@@ -716,6 +687,8 @@ fun SingletrackApp(
             onToggleOpenRecordingScreenOnStart = viewModel::setOpenRecordingScreenOnStart,
             voiceCuesEnabled = state.voiceCuesEnabled,
             onToggleVoiceCues = viewModel::setVoiceCuesEnabled,
+            gpxFullVoiceNavigationEnabled = state.gpxFullVoiceNavigationEnabled,
+            onToggleGpxFullVoiceNavigation = viewModel::setGpxFullVoiceNavigationEnabled,
             bleSensorState = state.bleSensorState,
             onRequestBleScan = requestBleScan,
             onStopBleScan = viewModel::stopBleSensorScan,
@@ -811,4 +784,95 @@ private fun DestinationIcon(
             }
         }
     }
+}
+
+@Composable
+private fun RideMainPane(
+    state: MainUiState,
+    viewModel: TrailViewModel,
+    onOpenSettings: () -> Unit,
+    onRequestLocationPermission: () -> Unit,
+    onConnectHealthConnect: () -> Unit,
+    onShareRideGpx: (RecordedRide) -> Unit,
+    onSelectGpxFile: () -> Unit,
+    onStartGpxNavigation: () -> Unit,
+    topInset: Dp,
+    bottomInset: Dp,
+    paneModifier: Modifier = Modifier
+) {
+    RideScreen(
+        activeRide = state.activeRide,
+        recordedRides = state.recordedRides,
+        measurementUnit = state.measurementUnit,
+        bleSensorState = state.bleSensorState,
+        healthConnectStatus = state.healthConnectStatus,
+        syncingRideId = state.syncingRideId,
+        hasLocationPermission = state.hasLocationPermission,
+        onOpenSettings = onOpenSettings,
+        onOpenRecordingScreen = viewModel::openRecordingScreen,
+        onRequestLocationPermission = onRequestLocationPermission,
+        onConnectHealthConnect = onConnectHealthConnect,
+        onStartRide = { viewModel.startRide() },
+        onPauseRide = viewModel::pauseRide,
+        onResumeRide = viewModel::resumeRide,
+        onFinishRide = viewModel::finishAndSaveRide,
+        onDiscardRide = viewModel::discardRide,
+        onOpenRideDetail = viewModel::openRideDetail,
+        onShareRideGpx = onShareRideGpx,
+        onSyncRide = viewModel::syncRideToHealthConnect,
+        onDeleteRide = viewModel::deleteRide,
+        gpxNavigation = state.gpxNavigation,
+        onSelectGpxFile = onSelectGpxFile,
+        onStartGpxNavigation = onStartGpxNavigation,
+        onStopGpxNavigation = viewModel::stopGpxNavigation,
+        onReverseGpxTrack = viewModel::reverseGpxTrack,
+        onClearGpxTrack = viewModel::clearGpxTrack,
+        onOpenGpxFullScreenMap = viewModel::openGpxFullScreenMap,
+        onToggleGpxFollowLocation = viewModel::toggleGpxFollowLocation,
+        onDisableGpxFollowLocation = viewModel::disableGpxFollowLocation,
+        voiceCuesEnabled = state.voiceCuesEnabled,
+        onToggleVoiceCues = viewModel::setVoiceCuesEnabled,
+        modifier = paneModifier,
+        topInset = topInset,
+        bottomInset = bottomInset
+    )
+}
+
+@Composable
+private fun RideDetailPane(
+    ride: RecordedRide,
+    state: MainUiState,
+    viewModel: TrailViewModel,
+    showBack: Boolean,
+    onOpenSettings: () -> Unit,
+    onShareRideGpx: (RecordedRide) -> Unit,
+    onSaveRideGpxFile: (RecordedRide) -> Unit,
+    onRequestHealthConnect: () -> Unit,
+    paneTopInset: Dp,
+    bottomInset: Dp,
+    paneModifier: Modifier = Modifier
+) {
+    RideDetailScreen(
+        ride = ride,
+        measurementUnit = state.measurementUnit,
+        isSyncing = state.syncingRideId == ride.id,
+        canSyncHealthConnect = state.healthConnectStatus.permissionsGranted,
+        showBackNavigation = showBack,
+        onBack = viewModel::closeRideDetail,
+        onOpenSettings = onOpenSettings,
+        onExpandFullScreenMap = viewModel::openFullScreenRideMap,
+        onShareGpx = onShareRideGpx,
+        onSaveGpxFile = onSaveRideGpxFile,
+        onSyncHealthConnect = { target ->
+            if (state.healthConnectStatus.permissionsGranted) {
+                viewModel.syncRideToHealthConnect(target)
+            } else {
+                onRequestHealthConnect()
+            }
+        },
+        onDeleteRide = viewModel::deleteRide,
+        modifier = paneModifier,
+        topInset = paneTopInset,
+        bottomInset = bottomInset
+    )
 }

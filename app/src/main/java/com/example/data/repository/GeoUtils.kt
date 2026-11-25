@@ -24,6 +24,9 @@ object GeoUtils {
     const val EARTH_RADIUS_MILES = 3958.7613
     const val RADIUS_TWENTY_MILES = 20.0
     const val RADIUS_TWENTY_MILES_METERS = 32187
+    private val CARDINAL_DIRECTIONS = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    private val POSITIVE_NUMBER_REGEX = Regex("""([0-9]+(?:\.[0-9]+)?)""")
+    private val SIGNED_NUMBER_REGEX = Regex("""(-?[0-9]+(?:\.[0-9]+)?)""")
 
     fun haversineMiles(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = Math.toRadians(lat2 - lat1)
@@ -49,9 +52,8 @@ object GeoUtils {
     }
 
     fun cardinalDirection(degrees: Double): String {
-        val dirs = listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
         val index = (((degrees + 22.5) % 360.0) / 45.0).toInt()
-        return dirs[index.coerceIn(0, dirs.lastIndex)]
+        return CARDINAL_DIRECTIONS[index.coerceIn(0, CARDINAL_DIRECTIONS.lastIndex)]
     }
 
     fun polylineLengthMiles(points: List<GeoPoint>): Double {
@@ -134,7 +136,7 @@ object GeoUtils {
         val raw = tags["distance"] ?: tags["length"]
         if (!raw.isNullOrBlank()) {
             val cleaned = raw.trim().lowercase(Locale.US)
-            val number = Regex("""([0-9]+(?:\.[0-9]+)?)""").find(cleaned)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+            val number = POSITIVE_NUMBER_REGEX.find(cleaned)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
             if (number != null && number > 0.0) {
                 return when {
                     cleaned.contains("mi") -> number
@@ -294,7 +296,7 @@ object GeoUtils {
     fun parseElevationFeet(raw: String?): Int? {
         if (raw.isNullOrBlank()) return null
         val cleaned = raw.trim().lowercase(Locale.US).replace(",", "")
-        val number = Regex("""(-?[0-9]+(?:\.[0-9]+)?)""")
+        val number = SIGNED_NUMBER_REGEX
             .find(cleaned)
             ?.groupValues
             ?.getOrNull(1)

@@ -62,6 +62,7 @@ data class MainUiState(
     val isFullScreenRideMap: Boolean = false,
     val gpxNavigation: GpxNavigationState = GpxNavigationState(),
     val voiceCuesEnabled: Boolean = true,
+    val gpxFullVoiceNavigationEnabled: Boolean = false,
     val bleSensorState: BleSensorUiState = BleSensorUiState(),
     val healthConnectStatus: HealthConnectStatus = HealthConnectStatus(
         availability = HealthConnectAvailability.UNAVAILABLE,

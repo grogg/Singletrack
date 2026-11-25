@@ -9,10 +9,154 @@ import java.util.Locale
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
+data class GpxVoiceCue(
+    val text: String,
+    val interrupt: Boolean
+)
+
 class VoiceCueAlertEngine {
     private var wasOffRoute = false
     private var lastOffRouteAlertMillis = -1L
     private var lastAnnouncedDistanceMilestone = 0
+    private var lastSpokenStatus: GpxRouteStatus = GpxRouteStatus.IDLE
+    private var lastSpokenTurnBucket: String? = null
+    private var lastSpokenTurnStage: Int = 0
+    private var announcedInitialStart = false
+    private var announcedFinish = false
+
+    fun evaluateGpxNavigationCue(
+        offRouteAlertsEnabled: Boolean,
+        fullVoiceNavEnabled: Boolean,
+        previousState: GpxNavigationState,
+        newState: GpxNavigationState,
+        unit: MeasurementUnit,
+        nowMillis: Long = System.currentTimeMillis()
+    ): GpxVoiceCue? {
+        if (!newState.isNavigating) {
+            resetGpxState()
+            return null
+        }
+
+        if (newState.routeStatus == GpxRouteStatus.OFF_ROUTE) {
+            val offRouteCue = evaluateGpxOffRouteCue(
+                isEnabled = offRouteAlertsEnabled || fullVoiceNavEnabled,
+                previousState = previousState,
+                newState = newState,
+                unit = unit,
+                nowMillis = nowMillis
+            )
+            lastSpokenStatus = GpxRouteStatus.OFF_ROUTE
+            return offRouteCue?.let { GpxVoiceCue(text = it, interrupt = true) }
+        }
+
+        val returningFromOffRoute = wasOffRoute || previousState.routeStatus == GpxRouteStatus.OFF_ROUTE
+        wasOffRoute = false
+
+        if (!fullVoiceNavEnabled) {
+            lastSpokenStatus = newState.routeStatus
+            return null
+        }
+
+        return when (newState.routeStatus) {
+            GpxRouteStatus.IDLE -> {
+                if (!announcedInitialStart) {
+                    announcedInitialStart = true
+                    lastSpokenStatus = GpxRouteStatus.IDLE
+                    val trackName = newState.track?.name?.takeIf { it.isNotBlank() }
+                    val text = if (trackName != null) {
+                        "Voice navigation started for $trackName."
+                    } else {
+                        "Voice navigation started."
+                    }
+                    GpxVoiceCue(text = text, interrupt = false)
+                } else {
+                    null
+                }
+            }
+
+            GpxRouteStatus.APPROACHING_START -> {
+                if (lastSpokenStatus != GpxRouteStatus.APPROACHING_START) {
+                    lastSpokenStatus = GpxRouteStatus.APPROACHING_START
+                    lastSpokenTurnBucket = "APPROACHING_START"
+                    lastSpokenTurnStage = 1
+                    val spokenCardinal = expandCardinalDirection(newState.bearingCardinal)
+                    val distText = newState.distanceToCueMiles
+                        ?.takeIf { it.isFinite() && it > 0.01 }
+                        ?.let { formatCueDistance(it, unit) }
+                    val text = buildString {
+                        if (spokenCardinal != null) {
+                            append("Head $spokenCardinal to trail start")
+                        } else {
+                            append("Head to trail start")
+                        }
+                        if (distText != null) {
+                            append(", $distText")
+                        }
+                        append('.')
+                    }
+                    GpxVoiceCue(text = text, interrupt = false)
+                } else {
+                    null
+                }
+            }
+
+            GpxRouteStatus.FINISHED -> {
+                if (!announcedFinish && lastSpokenStatus != GpxRouteStatus.FINISHED) {
+                    announcedFinish = true
+                    lastSpokenStatus = GpxRouteStatus.FINISHED
+                    lastSpokenTurnBucket = "FINISHED"
+                    lastSpokenTurnStage = 2
+                    GpxVoiceCue(
+                        text = "Route complete! You have reached the finish.",
+                        interrupt = true
+                    )
+                } else {
+                    null
+                }
+            }
+
+            GpxRouteStatus.ON_TRACK -> {
+                lastSpokenStatus = GpxRouteStatus.ON_TRACK
+                val instruction = newState.turnInstruction.trim()
+                val isContinue = instruction.startsWith("Continue ", ignoreCase = true)
+                val bucket = if (isContinue) "CONTINUE" else instruction
+                val distMiles = newState.distanceToCueMiles?.takeIf { it.isFinite() && it >= 0.0 }
+
+                val stage = when {
+                    isContinue -> 1
+                    distMiles != null && distMiles <= IMMINENT_TURN_MILES -> 2
+                    else -> 1
+                }
+
+                val bucketChanged = bucket != lastSpokenTurnBucket
+                val escalatedToImminent = !isContinue && bucket == lastSpokenTurnBucket && stage > lastSpokenTurnStage
+                if (!returningFromOffRoute && !bucketChanged && !escalatedToImminent) {
+                    return null
+                }
+
+                lastSpokenTurnBucket = bucket
+                lastSpokenTurnStage = stage
+
+                val body = formatTurnInstructionForVoice(
+                    instruction = instruction,
+                    isContinue = isContinue,
+                    cardinal = newState.bearingCardinal,
+                    distanceMiles = distMiles,
+                    stage = stage,
+                    unit = unit
+                )
+
+                val text = if (returningFromOffRoute) {
+                    "Back on track. $body"
+                } else {
+                    body
+                }
+                GpxVoiceCue(text = text, interrupt = returningFromOffRoute || stage == 2)
+            }
+
+            GpxRouteStatus.OFF_ROUTE -> null
+        }
+    }
 
     fun evaluateGpxOffRouteCue(
         isEnabled: Boolean,
@@ -94,12 +238,80 @@ class VoiceCueAlertEngine {
     fun resetGpxState() {
         wasOffRoute = false
         lastOffRouteAlertMillis = -1L
+        lastSpokenStatus = GpxRouteStatus.IDLE
+        lastSpokenTurnBucket = null
+        lastSpokenTurnStage = 0
+        announcedInitialStart = false
+        announcedFinish = false
     }
 
     companion object {
         const val OFF_ROUTE_REENTRY_COOLDOWN_MS = 15_000L
         const val OFF_ROUTE_REPEAT_INTERVAL_MS = 45_000L
+        const val IMMINENT_TURN_MILES = 0.05
         private const val MILESTONE_EPSILON = 1e-6
+
+        fun formatTurnInstructionForVoice(
+            instruction: String,
+            isContinue: Boolean,
+            cardinal: String?,
+            distanceMiles: Double?,
+            stage: Int,
+            unit: MeasurementUnit
+        ): String {
+            if (isContinue) {
+                val spokenCardinal = expandCardinalDirection(cardinal)
+                return if (spokenCardinal != null) {
+                    "Continue $spokenCardinal along track."
+                } else {
+                    "Continue along track."
+                }
+            }
+
+            if (instruction.equals("Finish ahead", ignoreCase = true)) {
+                val distText = distanceMiles
+                    ?.takeIf { it > 0.005 }
+                    ?.let { formatCueDistance(it, unit) }
+                return if (distText != null) {
+                    "Finish ahead in $distText."
+                } else {
+                    "Finish ahead."
+                }
+            }
+
+            if (stage >= 2) {
+                return "$instruction ahead."
+            }
+
+            val distText = distanceMiles
+                ?.takeIf { it > 0.005 }
+                ?.let { formatCueDistance(it, unit) }
+            return if (distText != null) {
+                "In $distText, ${instruction.replaceFirstChar { it.lowercase(Locale.US) }}."
+            } else {
+                "$instruction."
+            }
+        }
+
+        fun formatCueDistance(miles: Double, unit: MeasurementUnit): String {
+            return if (unit == MeasurementUnit.METRIC) {
+                val meters = miles * FormatUtils.MILES_TO_KM * 1000.0
+                if (meters >= 1000.0) {
+                    String.format(Locale.US, "%.1f kilometers", meters / 1000.0)
+                } else {
+                    val roundedMeters = ((meters / 10.0).roundToInt() * 10).coerceAtLeast(10)
+                    "$roundedMeters meters"
+                }
+            } else {
+                val feet = miles * 5280.0
+                if (feet >= 1000.0) {
+                    String.format(Locale.US, "%.1f miles", miles)
+                } else {
+                    val roundedFeet = ((feet / 50.0).roundToInt() * 50).coerceAtLeast(50)
+                    "$roundedFeet feet"
+                }
+            }
+        }
 
         fun formatOffRouteCue(
             offRouteFeet: Double?,

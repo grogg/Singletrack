@@ -154,25 +154,9 @@ class BleCyclingSensorManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun startScan() {
-        refreshCapabilities()
-        val state = _sensorState.value
-        if (!state.isBluetoothSupported) {
-            _sensorState.update { it.copy(statusMessage = "Bluetooth Low Energy is not supported on this device.") }
-            return
-        }
-        if (!hasRequiredPermissions()) {
-            _sensorState.update { it.copy(statusMessage = "Bluetooth permission is required to scan for sensors.") }
-            return
-        }
-        val adapter = bluetoothAdapter
-        if (adapter == null || !adapter.isEnabled) {
-            _sensorState.update { it.copy(statusMessage = "Turn on Bluetooth in system settings to scan for cycling sensors.") }
-            return
-        }
-        val scanner = adapter.bluetoothLeScanner ?: run {
-            _sensorState.update { it.copy(statusMessage = "BLE scanner unavailable.") }
-            return
-        }
+        val scanner = acquireBleScanner(label = "sensors") { message ->
+            _sensorState.update { it.copy(statusMessage = message) }
+        } ?: return
 
         stopScanInternal()
         stopHrScanInternal()
@@ -187,18 +171,11 @@ class BleCyclingSensorManager(private val context: Context) {
             )
         }
 
-        val filters = listOf(
-            ScanFilter.Builder()
-                .setServiceUuid(ParcelUuid(CSC_SERVICE_UUID))
-                .build()
-        )
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
+        val (filters, settings) = buildScanParams(CSC_SERVICE_UUID)
         try {
             scanner.startScan(filters, settings, scanCallback)
-        } catch (e: SecurityException) {
+        } catch (_: SecurityException) {
+            activeScanner = null
             _sensorState.update {
                 it.copy(
                     isScanning = false,
@@ -398,25 +375,9 @@ class BleCyclingSensorManager(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun startHrScan() {
-        refreshCapabilities()
-        val state = _sensorState.value
-        if (!state.isBluetoothSupported) {
-            _sensorState.update { it.copy(hrStatusMessage = "Bluetooth Low Energy is not supported on this device.") }
-            return
-        }
-        if (!hasRequiredPermissions()) {
-            _sensorState.update { it.copy(hrStatusMessage = "Bluetooth permission is required to scan for HR monitors.") }
-            return
-        }
-        val adapter = bluetoothAdapter
-        if (adapter == null || !adapter.isEnabled) {
-            _sensorState.update { it.copy(hrStatusMessage = "Turn on Bluetooth in system settings to scan for HR monitors.") }
-            return
-        }
-        val scanner = adapter.bluetoothLeScanner ?: run {
-            _sensorState.update { it.copy(hrStatusMessage = "BLE scanner unavailable.") }
-            return
-        }
+        val scanner = acquireBleScanner(label = "HR monitors") { message ->
+            _sensorState.update { it.copy(hrStatusMessage = message) }
+        } ?: return
 
         stopScanInternal()
         stopHrScanInternal()
@@ -431,18 +392,11 @@ class BleCyclingSensorManager(private val context: Context) {
             )
         }
 
-        val filters = listOf(
-            ScanFilter.Builder()
-                .setServiceUuid(ParcelUuid(HR_SERVICE_UUID))
-                .build()
-        )
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
+        val (filters, settings) = buildScanParams(HR_SERVICE_UUID)
         try {
             scanner.startScan(filters, settings, hrScanCallback)
         } catch (_: SecurityException) {
+            activeHrScanner = null
             _sensorState.update {
                 it.copy(
                     isScanningHr = false,
@@ -457,6 +411,43 @@ class BleCyclingSensorManager(private val context: Context) {
             delay(SCAN_TIMEOUT_MS)
             stopHrScan()
         }
+    }
+
+    private fun acquireBleScanner(
+        label: String,
+        onError: (String) -> Unit
+    ): BluetoothLeScanner? {
+        refreshCapabilities()
+        val state = _sensorState.value
+        if (!state.isBluetoothSupported) {
+            onError("Bluetooth Low Energy is not supported on this device.")
+            return null
+        }
+        if (!hasRequiredPermissions()) {
+            onError("Bluetooth permission is required to scan for $label.")
+            return null
+        }
+        val adapter = bluetoothAdapter
+        if (adapter == null || !adapter.isEnabled) {
+            onError("Turn on Bluetooth in system settings to scan for $label.")
+            return null
+        }
+        return adapter.bluetoothLeScanner ?: run {
+            onError("BLE scanner unavailable.")
+            null
+        }
+    }
+
+    private fun buildScanParams(serviceUuid: UUID): Pair<List<ScanFilter>, ScanSettings> {
+        val filters = listOf(
+            ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(serviceUuid))
+                .build()
+        )
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        return filters to settings
     }
 
     @SuppressLint("MissingPermission")
@@ -755,8 +746,8 @@ class BleCyclingSensorManager(private val context: Context) {
                 if (hasConnectPermission()) {
                     gatt.discoverServices()
                 }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                if (activeGatt == gatt && hasConnectPermission()) {
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                if (activeGatt === gatt && hasConnectPermission()) {
                     runCatching { gatt.close() }
                     activeGatt = null
                 }
@@ -766,7 +757,11 @@ class BleCyclingSensorManager(private val context: Context) {
                 lastCrankPacketAtMillis = 0L
                 _sensorState.update {
                     it.copy(
-                        connectionStatus = BleConnectionStatus.DISCONNECTED,
+                        connectionStatus = if (status != BluetoothGatt.GATT_SUCCESS && newState != BluetoothProfile.STATE_DISCONNECTED) {
+                            BleConnectionStatus.ERROR
+                        } else {
+                            BleConnectionStatus.DISCONNECTED
+                        },
                         liveSpeedMph = null,
                         liveCadenceRpm = null,
                         statusMessage = if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -927,8 +922,8 @@ class BleCyclingSensorManager(private val context: Context) {
                 if (hasConnectPermission()) {
                     gatt.discoverServices()
                 }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                if (activeHrGatt == gatt && hasConnectPermission()) {
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                if (activeHrGatt === gatt && hasConnectPermission()) {
                     runCatching { gatt.close() }
                     activeHrGatt = null
                 }
@@ -937,7 +932,11 @@ class BleCyclingSensorManager(private val context: Context) {
                 lastHrPacketAtMillis = 0L
                 _sensorState.update {
                     it.copy(
-                        hrConnectionStatus = BleConnectionStatus.DISCONNECTED,
+                        hrConnectionStatus = if (status != BluetoothGatt.GATT_SUCCESS && newState != BluetoothProfile.STATE_DISCONNECTED) {
+                            BleConnectionStatus.ERROR
+                        } else {
+                            BleConnectionStatus.DISCONNECTED
+                        },
                         liveHeartRateBpm = null,
                         hrStatusMessage = if (status != BluetoothGatt.GATT_SUCCESS) {
                             "HR sensor disconnected (status $status)"

@@ -12,6 +12,7 @@ import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -43,7 +44,7 @@ class LocationProvider(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun getCurrentLocation(): DeviceLocationResult {
+    suspend fun getCurrentLocation(resolveLabel: Boolean = true): DeviceLocationResult {
         if (!hasLocationPermission()) {
             return DeviceLocationResult.PermissionMissing
         }
@@ -58,7 +59,11 @@ class LocationProvider(private val context: Context) {
             return DeviceLocationResult.Unavailable
         }
 
-        val label = reverseGeocodeLabel(current.latitude, current.longitude)
+        val label = if (resolveLabel) {
+            reverseGeocodeLabel(current.latitude, current.longitude)
+        } else {
+            String.format(Locale.US, "%.3f°, %.3f°", current.latitude, current.longitude)
+        }
         return DeviceLocationResult.Success(
             lat = current.latitude,
             lon = current.longitude,
@@ -124,6 +129,8 @@ class LocationProvider(private val context: Context) {
                     if (formatted.isNotBlank()) return@withContext formatted
                 }
             }
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             // Fall through to coordinate label
         }

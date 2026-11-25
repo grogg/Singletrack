@@ -700,4 +700,207 @@ class GeoUtilsAndSerializerTest {
             )
         )
     }
+
+    @Test
+    fun voiceCueAlertEngine_fullGpxVoiceNavigationSpeaksTurnsRecoveryAndCompletion() {
+        val engine = VoiceCueAlertEngine()
+        val track = GpxTrackParser.buildTrack(
+            id = "voice-nav-1",
+            name = "Porcupine Rim",
+            fileName = "porcupine.gpx",
+            rawPoints = listOf(
+                Triple(38.5700, -109.5500, 1200.0),
+                Triple(38.5750, -109.5450, 1250.0)
+            )
+        )
+        val idleNav = GpxNavigationState(
+            track = track,
+            isNavigating = true,
+            routeStatus = GpxRouteStatus.IDLE
+        )
+
+        // When fullVoiceNavEnabled = false, non-off-route states are silent
+        assertNull(
+            engine.evaluateGpxNavigationCue(
+                offRouteAlertsEnabled = true,
+                fullVoiceNavEnabled = false,
+                previousState = idleNav,
+                newState = idleNav.copy(
+                    routeStatus = GpxRouteStatus.ON_TRACK,
+                    bearingCardinal = "NE",
+                    turnInstruction = "Continue NE along track"
+                ),
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 1_000L
+            )
+        )
+
+        engine.resetGpxState()
+
+        // 1. Acquiring GPS start cue when full voice nav is enabled
+        val startCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = idleNav,
+            newState = idleNav,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 2_000L
+        )
+        assertEquals("Voice navigation started for Porcupine Rim.", startCue?.text)
+        assertFalse(startCue?.interrupt == true)
+
+        // 2. Approaching start cue
+        val approachingState = idleNav.copy(
+            routeStatus = GpxRouteStatus.APPROACHING_START,
+            bearingCardinal = "E",
+            distanceToCueMiles = 0.25,
+            turnInstruction = "Head E to trail start"
+        )
+        val approachingCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = idleNav,
+            newState = approachingState,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 3_000L
+        )
+        assertEquals("Head east to trail start, 0.3 miles.", approachingCue?.text)
+
+        // 3. On track continue cue, deduplicated across cardinal wobble
+        val continueNorth = approachingState.copy(
+            routeStatus = GpxRouteStatus.ON_TRACK,
+            bearingCardinal = "N",
+            distanceToCueMiles = 1.4,
+            turnInstruction = "Continue N along track"
+        )
+        val continueCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = approachingState,
+            newState = continueNorth,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 4_000L
+        )
+        assertEquals("Continue north along track.", continueCue?.text)
+
+        assertNull(
+            engine.evaluateGpxNavigationCue(
+                offRouteAlertsEnabled = false,
+                fullVoiceNavEnabled = true,
+                previousState = continueNorth,
+                newState = continueNorth.copy(
+                    bearingCardinal = "NE",
+                    turnInstruction = "Continue NE along track"
+                ),
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 5_000L
+            )
+        )
+
+        // 4. Upcoming turn -> advance notice, then imminent escalation
+        val turnAdvance = continueNorth.copy(
+            turnInstruction = "Turn right",
+            distanceToCueMiles = 0.2
+        )
+        val advanceCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = continueNorth,
+            newState = turnAdvance,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 6_000L
+        )
+        assertEquals("In 0.2 miles, turn right.", advanceCue?.text)
+        assertFalse(advanceCue?.interrupt == true)
+
+        // Intermediate distance update (> 0.05 mi) does not repeat
+        assertNull(
+            engine.evaluateGpxNavigationCue(
+                offRouteAlertsEnabled = false,
+                fullVoiceNavEnabled = true,
+                previousState = turnAdvance,
+                newState = turnAdvance.copy(distanceToCueMiles = 0.12),
+                unit = MeasurementUnit.IMPERIAL,
+                nowMillis = 7_000L
+            )
+        )
+
+        // Imminent turn (<= 0.05 mi) escalates once with interrupt = true
+        val turnImminent = turnAdvance.copy(distanceToCueMiles = 0.03)
+        val imminentCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = turnAdvance,
+            newState = turnImminent,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 8_000L
+        )
+        assertEquals("Turn right ahead.", imminentCue?.text)
+        assertTrue(imminentCue?.interrupt == true)
+
+        // 5. Off-route fires even if offRouteAlertsEnabled=false when fullVoiceNavEnabled=true, then back on track
+        val offRoute = turnImminent.copy(
+            routeStatus = GpxRouteStatus.OFF_ROUTE,
+            offRouteFeet = 220.0,
+            bearingCardinal = "W"
+        )
+        val offRouteCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = turnImminent,
+            newState = offRoute,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 10_000L
+        )
+        assertEquals("Off route. 220 feet from trail. Head west.", offRouteCue?.text)
+        assertTrue(offRouteCue?.interrupt == true)
+
+        val recovered = offRoute.copy(
+            routeStatus = GpxRouteStatus.ON_TRACK,
+            bearingCardinal = "E",
+            turnInstruction = "Continue E along track",
+            distanceToCueMiles = 0.5
+        )
+        val backOnTrackCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = offRoute,
+            newState = recovered,
+            unit = MeasurementUnit.IMPERIAL,
+            nowMillis = 15_000L
+        )
+        assertEquals("Back on track. Continue east along track.", backOnTrackCue?.text)
+        assertTrue(backOnTrackCue?.interrupt == true)
+
+        // 6. Metric switchback cue & finish completion
+        val switchback = recovered.copy(
+            turnInstruction = "Sharp switchback left",
+            distanceToCueMiles = 0.124 // ~200 m
+        )
+        val metricTurnCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = recovered,
+            newState = switchback,
+            unit = MeasurementUnit.METRIC,
+            nowMillis = 20_000L
+        )
+        assertEquals("In 200 meters, sharp switchback left.", metricTurnCue?.text)
+
+        val finished = switchback.copy(
+            routeStatus = GpxRouteStatus.FINISHED,
+            turnInstruction = "Route complete!",
+            distanceToCueMiles = 0.0
+        )
+        val finishCue = engine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = false,
+            fullVoiceNavEnabled = true,
+            previousState = switchback,
+            newState = finished,
+            unit = MeasurementUnit.METRIC,
+            nowMillis = 30_000L
+        )
+        assertEquals("Route complete! You have reached the finish.", finishCue?.text)
+        assertTrue(finishCue?.interrupt == true)
+    }
 }

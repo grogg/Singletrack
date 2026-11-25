@@ -57,6 +57,8 @@ fun UnitSettingsDialog(
     onToggleOpenRecordingScreenOnStart: (Boolean) -> Unit = {},
     voiceCuesEnabled: Boolean = true,
     onToggleVoiceCues: (Boolean) -> Unit = {},
+    gpxFullVoiceNavigationEnabled: Boolean = false,
+    onToggleGpxFullVoiceNavigation: (Boolean) -> Unit = {},
     bleSensorState: BleSensorUiState = BleSensorUiState(),
     onRequestBleScan: () -> Unit = {},
     onStopBleScan: () -> Unit = {},
@@ -330,7 +332,10 @@ fun UnitSettingsDialog(
                     HorizontalDivider()
 
                     // Spoken Audio Cues
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.testTag("settings_spoken_audio_cues_section")
+                    ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -354,6 +359,7 @@ fun UnitSettingsDialog(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(14.dp))
                                 .clickable { onToggleVoiceCues(!voiceCuesEnabled) }
+                                .testTag("settings_voice_cues_card")
                         ) {
                             Row(
                                 modifier = Modifier
@@ -378,6 +384,42 @@ fun UnitSettingsDialog(
                                     checked = voiceCuesEnabled,
                                     onCheckedChange = onToggleVoiceCues,
                                     modifier = Modifier.testTag("settings_voice_cues_switch")
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onToggleGpxFullVoiceNavigation(!gpxFullVoiceNavigationEnabled) }
+                                .testTag("settings_gpx_full_voice_nav_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Full voice navigation (GPX)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Speaks turn-by-turn directions, switchback warnings, back-on-track cues, and route completion during GPX track navigation.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = gpxFullVoiceNavigationEnabled,
+                                    onCheckedChange = onToggleGpxFullVoiceNavigation,
+                                    modifier = Modifier.testTag("settings_gpx_full_voice_nav_switch")
                                 )
                             }
                         }

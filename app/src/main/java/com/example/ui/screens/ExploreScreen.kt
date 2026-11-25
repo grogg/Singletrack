@@ -385,6 +385,9 @@ fun ExploreScreen(
             }
 
             // Difficulty filter chips
+            val difficultyCounts = remember(state.trails) {
+                state.trails.groupingBy { it.difficulty }.eachCount()
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -397,7 +400,7 @@ fun ExploreScreen(
                     label = { Text("All (${state.trails.size})") }
                 )
                 TrailDifficulty.entries.forEach { difficulty ->
-                    val count = state.trails.count { it.difficulty == difficulty }
+                    val count = difficultyCounts[difficulty] ?: 0
                     if (count > 0 || state.selectedDifficulty == difficulty) {
                         FilterChip(
                             selected = state.selectedDifficulty == difficulty,

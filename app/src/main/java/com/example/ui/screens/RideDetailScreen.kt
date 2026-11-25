@@ -96,14 +96,35 @@ fun RideDetailScreen(
         BackHandler(onBack = onBack)
     }
 
-    val altitudeSamples = remember(ride.samples) {
-        ride.samples.mapNotNull { it.altitudeMeters }
+    val elevationSeriesStats = remember(ride.samples) {
+        val altitudeMeters = ride.samples.mapNotNull { it.altitudeMeters }
+        if (altitudeMeters.size >= 2) {
+            var minFeet = Double.POSITIVE_INFINITY
+            var maxFeet = Double.NEGATIVE_INFINITY
+            val series = List(altitudeMeters.size) { index ->
+                val ft = altitudeMeters[index] * 3.28084
+                if (ft < minFeet) minFeet = ft
+                if (ft > maxFeet) maxFeet = ft
+                ft
+            }
+            Triple(series, minFeet.roundToInt(), maxFeet.roundToInt())
+        } else {
+            null
+        }
     }
     val speedSamplesMph = remember(ride.samples) {
         ride.samples.mapNotNull { it.speedMps?.let { mps -> mps * 2.23694 } }
     }
-    val hrSamples = remember(ride.samples) {
-        ride.samples.mapNotNull { it.heartRateBpm?.toDouble() }
+    val hrSeriesStats = remember(ride.samples, ride.maxHeartRateBpm, ride.avgHeartRateBpm) {
+        val hrValues = ride.samples.mapNotNull { it.heartRateBpm?.toDouble() }
+        if (hrValues.size >= 2) {
+            val minBpm = hrValues.min().roundToInt()
+            val maxBpm = ride.maxHeartRateBpm ?: hrValues.max().roundToInt()
+            val avgBpm = ride.avgHeartRateBpm ?: hrValues.average().roundToInt()
+            Triple(hrValues, minBpm, maxBpm to avgBpm)
+        } else {
+            null
+        }
     }
 
     Column(
@@ -357,10 +378,8 @@ fun RideDetailScreen(
             }
 
             // Recorded Elevation or Speed Profile Curve
-            if (altitudeSamples.size >= 2) {
-                val minFt = (altitudeSamples.min() * 3.28084).roundToInt()
-                val maxFt = (altitudeSamples.max() * 3.28084).roundToInt()
-                val elevSeries = altitudeSamples.map { it * 3.28084 }
+            if (elevationSeriesStats != null) {
+                val (elevSeries, minFt, maxFt) = elevationSeriesStats
                 RideTelemetryChartCard(
                     title = "Recorded Elevation Curve",
                     icon = Icons.AutoMirrored.Filled.TrendingUp,
@@ -380,10 +399,9 @@ fun RideDetailScreen(
                 )
             }
 
-            if (hrSamples.size >= 2) {
-                val minBpm = hrSamples.min().roundToInt()
-                val maxBpm = ride.maxHeartRateBpm ?: hrSamples.max().roundToInt()
-                val avgBpm = ride.avgHeartRateBpm ?: hrSamples.average().roundToInt()
+            if (hrSeriesStats != null) {
+                val (hrSamples, minBpm, maxAndAvgBpm) = hrSeriesStats
+                val (maxBpm, avgBpm) = maxAndAvgBpm
                 RideTelemetryChartCard(
                     title = "Recorded Heart Rate",
                     icon = Icons.Filled.Favorite,
@@ -593,22 +611,40 @@ private fun RideTelemetryChartCard(
                 )
             }
 
+            val chartData = remember(values) {
+                val maxSamples = 180
+                val sampled = if (values.size <= maxSamples) {
+                    values
+                } else {
+                    val lastIdx = values.lastIndex
+                    List(maxSamples) { i ->
+                        val srcIndex = ((i.toLong() * lastIdx) / (maxSamples - 1)).toInt()
+                        values[srcIndex]
+                    }
+                }
+                var minV = Double.POSITIVE_INFINITY
+                var maxV = Double.NEGATIVE_INFINITY
+                for (v in sampled) {
+                    if (v < minV) minV = v
+                    if (v > maxV) maxV = v
+                }
+                val spanV = (maxV - minV).coerceAtLeast(10.0)
+                Triple(sampled, minV, spanV)
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(104.dp)
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    if (values.size < 2) return@Canvas
+                    val (chartValues, minVal, span) = chartData
+                    if (chartValues.size < 2) return@Canvas
                     val padTop = 8.dp.toPx()
                     val padBottom = 8.dp.toPx()
                     val padH = 4.dp.toPx()
                     val chartW = (size.width - padH * 2f).coerceAtLeast(1f)
                     val chartH = (size.height - padTop - padBottom).coerceAtLeast(1f)
-
-                    val minVal = values.min()
-                    val maxVal = values.max()
-                    val span = (maxVal - minVal).coerceAtLeast(10.0)
 
                     for (step in 0..2) {
                         val y = padTop + chartH * (step / 2f)
@@ -621,28 +657,29 @@ private fun RideTelemetryChartCard(
                         )
                     }
 
-                    val coords = values.mapIndexed { idx, v ->
-                        val xFrac = idx.toFloat() / (values.size - 1).coerceAtLeast(1)
-                        val yFrac = ((v - minVal) / span).toFloat().coerceIn(0f, 1f)
-                        Offset(
-                            x = padH + xFrac * chartW,
-                            y = padTop + chartH * (1f - yFrac)
-                        )
-                    }
+                    val lastIndex = (chartValues.size - 1).coerceAtLeast(1)
+                    val firstX = padH
+                    val firstY = padTop + chartH * (1f - ((chartValues[0] - minVal) / span).toFloat().coerceIn(0f, 1f))
+                    var prevX = firstX
+                    var prevY = firstY
 
                     strokePath.reset()
-                    strokePath.moveTo(coords.first().x, coords.first().y)
-                    for (i in 1 until coords.size) {
-                        val prev = coords[i - 1]
-                        val curr = coords[i]
-                        val midX = (prev.x + curr.x) / 2f
-                        strokePath.cubicTo(midX, prev.y, midX, curr.y, curr.x, curr.y)
+                    strokePath.moveTo(firstX, firstY)
+                    for (i in 1 until chartValues.size) {
+                        val xFrac = i.toFloat() / lastIndex
+                        val yFrac = ((chartValues[i] - minVal) / span).toFloat().coerceIn(0f, 1f)
+                        val currX = padH + xFrac * chartW
+                        val currY = padTop + chartH * (1f - yFrac)
+                        val midX = (prevX + currX) / 2f
+                        strokePath.cubicTo(midX, prevY, midX, currY, currX, currY)
+                        prevX = currX
+                        prevY = currY
                     }
 
                     fillPath.reset()
                     fillPath.addPath(strokePath)
-                    fillPath.lineTo(coords.last().x, padTop + chartH)
-                    fillPath.lineTo(coords.first().x, padTop + chartH)
+                    fillPath.lineTo(prevX, padTop + chartH)
+                    fillPath.lineTo(firstX, padTop + chartH)
                     fillPath.close()
 
                     drawPath(

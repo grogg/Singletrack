@@ -46,6 +46,12 @@ class AppPreferences(context: Context) {
             prefs.edit { putBoolean(KEY_VOICE_CUES_ENABLED, value) }
         }
 
+    var gpxFullVoiceNavigationEnabled: Boolean
+        get() = prefs.getBoolean(KEY_GPX_FULL_VOICE_NAVIGATION, false)
+        set(value) {
+            prefs.edit { putBoolean(KEY_GPX_FULL_VOICE_NAVIGATION, value) }
+        }
+
     var autoSyncToHealthConnect: Boolean
         get() = prefs.getBoolean(KEY_AUTO_SYNC_HEALTH_CONNECT, true)
         set(value) {
@@ -59,6 +65,7 @@ class AppPreferences(context: Context) {
         const val KEY_DEFAULT_OFFLINE_REGION_ID = "default_offline_region_id"
         const val KEY_OPEN_RECORDING_SCREEN_ON_START = "open_recording_screen_on_start"
         const val KEY_VOICE_CUES_ENABLED = "voice_cues_enabled"
+        const val KEY_GPX_FULL_VOICE_NAVIGATION = "gpx_full_voice_navigation"
         const val KEY_AUTO_SYNC_HEALTH_CONNECT = "auto_sync_health_connect"
     }
 }

@@ -353,16 +353,54 @@ class SingletrackAppRobolectricTest {
     fun `app preferences persist settings including auto sync and voice cues`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = AppPreferences(context)
+        assertFalse(prefs.gpxFullVoiceNavigationEnabled)
         prefs.measurementUnit = MeasurementUnit.METRIC
         prefs.voiceCuesEnabled = false
+        prefs.gpxFullVoiceNavigationEnabled = true
         prefs.autoSyncToHealthConnect = false
         prefs.defaultOfflineRegionId = "region_moab"
 
         val reloaded = AppPreferences(context)
         assertEquals(MeasurementUnit.METRIC, reloaded.measurementUnit)
         assertFalse(reloaded.voiceCuesEnabled)
+        assertTrue(reloaded.gpxFullVoiceNavigationEnabled)
         assertFalse(reloaded.autoSyncToHealthConnect)
         assertEquals("region_moab", reloaded.defaultOfflineRegionId)
+    }
+
+    @Test
+    fun `settings dialog places full voice GPX navigation below spoken audio cues and toggles it`() {
+        val toggledFullVoiceNav = mutableListOf<Boolean>()
+
+        composeRule.setContent {
+            SingletrackTheme {
+                UnitSettingsDialog(
+                    currentUnit = MeasurementUnit.IMPERIAL,
+                    onSelectUnit = {},
+                    voiceCuesEnabled = true,
+                    gpxFullVoiceNavigationEnabled = false,
+                    onToggleGpxFullVoiceNavigation = { enabled -> toggledFullVoiceNav.add(enabled) },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        val voiceCuesCard = composeRule.onNodeWithTag("settings_voice_cues_card")
+        val fullVoiceCard = composeRule.onNodeWithTag("settings_gpx_full_voice_nav_card")
+        val fullVoiceSwitch = composeRule.onNodeWithTag("settings_gpx_full_voice_nav_switch")
+
+        fullVoiceCard.performScrollTo().assertIsDisplayed()
+        voiceCuesCard.performScrollTo().assertIsDisplayed()
+
+        val voiceCuesY = voiceCuesCard.fetchSemanticsNode().positionInRoot.y
+        val fullVoiceY = fullVoiceCard.fetchSemanticsNode().positionInRoot.y
+        assertTrue(
+            "Expected Full voice navigation ($fullVoiceY) below Spoken Audio Cues ($voiceCuesY)",
+            fullVoiceY > voiceCuesY
+        )
+
+        fullVoiceSwitch.performScrollTo().performClick()
+        assertEquals(listOf(true), toggledFullVoiceNav)
     }
 
     @Test

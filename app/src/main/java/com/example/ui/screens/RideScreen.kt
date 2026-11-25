@@ -104,7 +104,6 @@ fun RideScreen(
     voiceCuesEnabled: Boolean = true,
     onToggleVoiceCues: (Boolean) -> Unit = {}
 ) {
-
     LazyColumn(
         modifier = modifier
             .fillMaxSize()

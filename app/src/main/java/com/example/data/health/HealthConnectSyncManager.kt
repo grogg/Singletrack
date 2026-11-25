@@ -16,6 +16,7 @@ import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.units.Length
 import androidx.health.connect.client.units.Velocity
 import com.example.domain.model.RecordedRide
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -76,6 +77,8 @@ class HealthConnectSyncManager(private val context: Context) {
             ?: return@withContext HealthConnectStatus(availability, permissionsGranted = false)
         val granted = try {
             client.permissionController.getGrantedPermissions()
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (_: Exception) {
             emptySet()
         }
@@ -244,6 +247,8 @@ class HealthConnectSyncManager(private val context: Context) {
 
             val response = client.insertRecords(recordsToInsert)
             Result.success(response.recordIdsList.firstOrNull())
+        } catch (ce: CancellationException) {
+            throw ce
         } catch (e: Exception) {
             Result.failure(e)
         }

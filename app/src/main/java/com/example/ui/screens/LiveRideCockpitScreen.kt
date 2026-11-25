@@ -82,6 +82,22 @@ import com.example.ui.theme.Terracotta
 import com.example.ui.theme.TerracottaBright
 import kotlin.math.roundToInt
 
+private val ElapsedTimeTextStyle = TextStyle(
+    fontFamily = JetBrainsMonoFontFamily,
+    fontWeight = FontWeight.Bold,
+    fontSize = 48.sp,
+    lineHeight = 54.sp,
+    fontFeatureSettings = "tnum"
+)
+
+private val MetricHeadlineTextStyle = TextStyle(
+    fontFamily = OutfitFontFamily,
+    fontWeight = FontWeight.Bold,
+    fontSize = 26.sp,
+    lineHeight = 30.sp,
+    fontFeatureSettings = "tnum"
+)
+
 @Composable
 fun LiveRideCockpitScreen(
     activeRide: ActiveRideMetrics,
@@ -350,13 +366,7 @@ fun LiveRideCockpitScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = FormatUtils.formatDuration(activeRide.elapsedSeconds),
-                        style = TextStyle(
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 48.sp,
-                            lineHeight = 54.sp,
-                            fontFeatureSettings = "tnum"
-                        ),
+                        style = ElapsedTimeTextStyle,
                         color = Color.White,
                         modifier = Modifier.testTag("cockpit_elapsed_time")
                     )
@@ -579,12 +589,7 @@ fun LiveRideCockpitScreen(
                                         measurementUnit,
                                         prefix = "+"
                                     ),
-                                    style = TextStyle(
-                                        fontFamily = OutfitFontFamily,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 26.sp,
-                                        fontFeatureSettings = "tnum"
-                                    ),
+                                    style = MetricHeadlineTextStyle,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
@@ -609,12 +614,7 @@ fun LiveRideCockpitScreen(
                                     text = activeRide.currentAltitudeFeet?.let {
                                         FormatUtils.formatElevation(it, measurementUnit)
                                     } ?: "--",
-                                    style = TextStyle(
-                                        fontFamily = OutfitFontFamily,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 26.sp,
-                                        fontFeatureSettings = "tnum"
-                                    ),
+                                    style = MetricHeadlineTextStyle,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
@@ -677,13 +677,7 @@ private fun CockpitMetricCard(
 
             Text(
                 text = value,
-                style = TextStyle(
-                    fontFamily = OutfitFontFamily,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 26.sp,
-                    lineHeight = 30.sp,
-                    fontFeatureSettings = "tnum"
-                ),
+                style = MetricHeadlineTextStyle,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis

@@ -79,6 +79,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
             defaultOfflineRegionId = appPreferences.defaultOfflineRegionId,
             openRecordingScreenOnStart = appPreferences.openRecordingScreenOnStart,
             voiceCuesEnabled = appPreferences.voiceCuesEnabled,
+            gpxFullVoiceNavigationEnabled = appPreferences.gpxFullVoiceNavigationEnabled,
             autoSyncToHealthConnect = appPreferences.autoSyncToHealthConnect,
             hasLocationPermission = locationProvider.hasLocationPermission(),
             bleSensorState = bleSensorManager.sensorState.value
@@ -378,12 +379,16 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
         _uiState.update { it.copy(gpxNavigation = initial) }
         maybeSpeakOffRouteAlert(currentNav, initial)
-        syncGpxNavigationGpsLoop()
+        if (_uiState.value.activeRide.status == RideRecordingStatus.IDLE) {
+            startRide(trailName = track.name)
+        } else {
+            syncGpxNavigationGpsLoop()
+        }
 
         if (initial.userLocation == null) {
             gpxInitFixJob?.cancel()
             gpxInitFixJob = viewModelScope.launch {
-                val fix = locationProvider.getCurrentLocation()
+                val fix = locationProvider.getCurrentLocation(resolveLabel = false)
                 if (fix is DeviceLocationResult.Success) {
                     var transition: Pair<GpxNavigationState, GpxNavigationState>? = null
                     _uiState.update { state ->
@@ -552,10 +557,20 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setVoiceCuesEnabled(enabled: Boolean) {
         appPreferences.voiceCuesEnabled = enabled
-        if (!enabled) {
+        val state = _uiState.value
+        if (!enabled && !(state.gpxFullVoiceNavigationEnabled && state.gpxNavigation.isNavigating)) {
             voiceCueSpeaker.stop()
         }
         _uiState.update { it.copy(voiceCuesEnabled = enabled) }
+    }
+
+    fun setGpxFullVoiceNavigationEnabled(enabled: Boolean) {
+        appPreferences.gpxFullVoiceNavigationEnabled = enabled
+        val state = _uiState.value
+        if (!enabled && !state.voiceCuesEnabled) {
+            voiceCueSpeaker.stop()
+        }
+        _uiState.update { it.copy(gpxFullVoiceNavigationEnabled = enabled) }
     }
 
     fun setOpenRecordingScreenOnStart(enabled: Boolean) {
@@ -1007,19 +1022,23 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteOfflineRegion(regionId: String) {
         viewModelScope.launch {
             trailRepository.deleteOfflineRegion(regionId)
-            if (_uiState.value.defaultOfflineRegionId == regionId) {
-                val nextDefault = _uiState.value.offlineRegions
-                    .firstOrNull { it.id != regionId }
-                    ?.id
-                appPreferences.defaultOfflineRegionId = nextDefault
-                _uiState.update {
-                    it.copy(
+            var updatedDefaultId: String? = null
+            var defaultChanged = false
+            _uiState.update { state ->
+                if (state.defaultOfflineRegionId == regionId) {
+                    val nextDefault = state.offlineRegions.firstOrNull { it.id != regionId }?.id
+                    updatedDefaultId = nextDefault
+                    defaultChanged = true
+                    state.copy(
                         defaultOfflineRegionId = nextDefault,
                         snackbarMessage = "Offline region removed"
                     )
+                } else {
+                    state.copy(snackbarMessage = "Offline region removed")
                 }
-            } else {
-                _uiState.update { it.copy(snackbarMessage = "Offline region removed") }
+            }
+            if (defaultChanged) {
+                appPreferences.defaultOfflineRegionId = updatedDefaultId
             }
         }
     }
@@ -1551,14 +1570,15 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         newState: GpxNavigationState
     ) {
         val currentState = _uiState.value
-        val cue = voiceCueAlertEngine.evaluateGpxOffRouteCue(
-            isEnabled = currentState.voiceCuesEnabled,
+        val cue = voiceCueAlertEngine.evaluateGpxNavigationCue(
+            offRouteAlertsEnabled = currentState.voiceCuesEnabled,
+            fullVoiceNavEnabled = currentState.gpxFullVoiceNavigationEnabled,
             previousState = previousState,
             newState = newState,
             unit = currentState.measurementUnit
         )
         if (cue != null) {
-            voiceCueSpeaker.speak(cue, interrupt = true)
+            voiceCueSpeaker.speak(cue.text, interrupt = cue.interrupt)
         }
     }
 

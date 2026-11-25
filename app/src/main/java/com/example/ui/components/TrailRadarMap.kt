@@ -317,13 +317,7 @@ fun TrailRadarMap(
 
             // 4. Draw trail name labels when zoomed in or in full-screen for selected trail
             if (isFullScreen || zoom >= 12.0f) {
-                val labeledTrails = buildList {
-                    selectedPin?.let { add(it) }
-                    if (zoom >= 12.2f) {
-                        addAll(unselectedTrails.take(14))
-                    }
-                }
-                for (trail in labeledTrails) {
+                fun drawTrailLabel(trail: Trail, badgeAlpha: Float) {
                     val pos = toScreen(GeoPoint(trail.centerLat, trail.centerLon))
                     val labelText = trail.name.take(26)
                     val measured = labelLayoutCache.getOrPut(labelText) {
@@ -335,9 +329,17 @@ fun TrailRadarMap(
                     drawMapLabelBadge(
                         measured = measured,
                         anchor = pos,
-                        badgeAlpha = if (trail.osmKey == selectedPin?.osmKey) 0.92f else 0.76f,
+                        badgeAlpha = badgeAlpha,
                         badgeColor = TopoMapBadgeScrim
                     )
+                }
+
+                selectedPin?.let { drawTrailLabel(it, badgeAlpha = 0.92f) }
+                if (zoom >= 12.2f) {
+                    val maxUnselectedLabels = minOf(14, unselectedTrails.size)
+                    for (i in 0 until maxUnselectedLabels) {
+                        drawTrailLabel(unselectedTrails[i], badgeAlpha = 0.76f)
+                    }
                 }
             }
 
