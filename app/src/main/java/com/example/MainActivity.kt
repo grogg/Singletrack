@@ -2,7 +2,10 @@ package com.example
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -45,6 +48,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -272,9 +276,13 @@ fun SingletrackApp(
                 !(isExpanded && selectedTrail != null)
             )
 
+        val keepScreenAwake = state.activeRide.status == RideRecordingStatus.RECORDING ||
+            state.gpxNavigation.isNavigating
+        KeepScreenAwakeEffect(keepAwake = keepScreenAwake)
+
         SideEffect {
             if (!view.isInEditMode) {
-                val window = (view.context as? Activity)?.window
+                val window = findActivity(view.context)?.window
                 if (window != null) {
                     val controller = WindowCompat.getInsetsController(window, view)
                     controller.isAppearanceLightStatusBars = !isDark && !hasDarkTopHeader
@@ -875,4 +883,32 @@ private fun RideDetailPane(
         topInset = paneTopInset,
         bottomInset = bottomInset
     )
+}
+
+@Composable
+internal fun KeepScreenAwakeEffect(keepAwake: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(view, keepAwake) {
+        val window = findActivity(view.context)?.window
+        if (!view.isInEditMode) {
+            view.keepScreenOn = keepAwake
+            if (keepAwake) {
+                window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+        onDispose {
+            if (!view.isInEditMode) {
+                view.keepScreenOn = false
+                window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+}
+
+private tailrec fun findActivity(context: Context): Activity? = when (context) {
+    is Activity -> context
+    is ContextWrapper -> findActivity(context.baseContext)
+    else -> null
 }

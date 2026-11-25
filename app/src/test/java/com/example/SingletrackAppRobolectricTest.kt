@@ -7,10 +7,13 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -59,7 +62,7 @@ import org.robolectric.annotation.Config
 class SingletrackAppRobolectricTest {
 
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun `app name matches Singletrack MTB`() {
@@ -446,5 +449,41 @@ class SingletrackAppRobolectricTest {
             "Expected status pill center ($statusCenterX) to match elapsed center ($elapsedCenterX)",
             abs(statusCenterX - elapsedCenterX) < 2f
         )
+    }
+
+    @Test
+    fun `keep screen awake effect toggles FLAG_KEEP_SCREEN_ON and view keepScreenOn`() {
+        val keepAwakeState = mutableStateOf(false)
+        lateinit var hostView: android.view.View
+
+        composeRule.setContent {
+            hostView = LocalView.current
+            KeepScreenAwakeEffect(keepAwake = keepAwakeState.value)
+        }
+
+        composeRule.runOnIdle {
+            assertFalse(hostView.keepScreenOn)
+            assertEquals(
+                0,
+                composeRule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+
+        keepAwakeState.value = true
+        composeRule.runOnIdle {
+            assertTrue(hostView.keepScreenOn)
+            assertTrue(
+                (composeRule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0
+            )
+        }
+
+        keepAwakeState.value = false
+        composeRule.runOnIdle {
+            assertFalse(hostView.keepScreenOn)
+            assertEquals(
+                0,
+                composeRule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
     }
 }
