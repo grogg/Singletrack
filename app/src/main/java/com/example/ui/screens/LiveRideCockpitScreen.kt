@@ -98,6 +98,10 @@ private val MetricHeadlineTextStyle = TextStyle(
     fontFeatureSettings = "tnum"
 )
 
+private val HeroBannerBrush = Brush.verticalGradient(
+    colors = listOf(PineDeep, PineForest)
+)
+
 @Composable
 fun LiveRideCockpitScreen(
     activeRide: ActiveRideMetrics,
@@ -245,11 +249,7 @@ fun LiveRideCockpitScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(PineDeep, PineForest)
-                        )
-                    )
+                    .background(HeroBannerBrush)
                     .windowInsetsPadding(
                         WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
                     )

@@ -9,6 +9,7 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.size.Precision
 import coil3.toBitmap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Collections
@@ -45,7 +46,7 @@ class TopoTileLoader(context: Context) {
 
         try {
             val subdomain = SUBDOMAINS[(x + y).and(Int.MAX_VALUE) % SUBDOMAINS.size]
-            val urls = listOf(
+            val urls = arrayOf(
                 "https://$subdomain.tile.opentopomap.org/$z/$x/$y.png",
                 "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/$z/$y/$x"
             )
@@ -60,7 +61,13 @@ class TopoTileLoader(context: Context) {
                     .allowHardware(false)
                     .build()
 
-                val result = runCatching { imageLoader.execute(request) }.getOrNull()
+                val result = try {
+                    imageLoader.execute(request)
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (_: Exception) {
+                    null
+                }
                 if (result is SuccessResult) {
                     val bitmap = runCatching { result.image.toBitmap().asImageBitmap() }.getOrNull()
                     if (bitmap != null) {

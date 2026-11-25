@@ -87,6 +87,13 @@ import com.example.ui.components.TrailRadarMap
 import com.example.ui.theme.PineDeep
 import com.example.ui.viewmodel.MainUiState
 
+private val HeroOverlayBrush = Brush.verticalGradient(
+    colors = listOf(
+        PineDeep.copy(alpha = 0.58f),
+        PineDeep.copy(alpha = 0.90f)
+    )
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExploreScreen(
@@ -129,14 +136,7 @@ fun ExploreScreen(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                PineDeep.copy(alpha = 0.58f),
-                                PineDeep.copy(alpha = 0.90f)
-                            )
-                        )
-                    )
+                    .background(HeroOverlayBrush)
             )
             Column(
                 modifier = Modifier

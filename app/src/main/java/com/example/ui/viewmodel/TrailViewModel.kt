@@ -414,17 +414,20 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopGpxNavigation() {
+        val wasNavigating = _uiState.value.gpxNavigation.isNavigating
         gpxInitFixJob?.cancel()
         gpxNavGpsJob?.cancel()
         gpxNavGpsJob = null
         voiceCueAlertEngine.resetGpxState()
-        if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) {
-            voiceCueSpeaker.stop()
-        }
         _uiState.update { state ->
             state.copy(
                 gpxNavigation = GpxNavigationEngine.idleState(state.gpxNavigation.track)
             )
+        }
+        if (wasNavigating && _uiState.value.activeRide.status != RideRecordingStatus.IDLE) {
+            finishAndSaveRide()
+        } else if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) {
+            voiceCueSpeaker.stop()
         }
     }
 
@@ -462,17 +465,20 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearGpxTrack() {
+        val wasNavigating = _uiState.value.gpxNavigation.isNavigating
         gpxInitFixJob?.cancel()
         gpxNavGpsJob?.cancel()
         gpxNavGpsJob = null
         voiceCueAlertEngine.resetGpxState()
-        if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) {
-            voiceCueSpeaker.stop()
-        }
         viewModelScope.launch(Dispatchers.IO) {
             gpxTrackStorage.clearActiveTrack()
         }
         _uiState.update { it.copy(gpxNavigation = GpxNavigationState()) }
+        if (wasNavigating && _uiState.value.activeRide.status != RideRecordingStatus.IDLE) {
+            finishAndSaveRide()
+        } else if (_uiState.value.activeRide.status != RideRecordingStatus.RECORDING) {
+            voiceCueSpeaker.stop()
+        }
     }
 
     fun openGpxFullScreenMap() {
