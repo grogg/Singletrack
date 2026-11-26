@@ -12,8 +12,8 @@ android {
     applicationId = "com.aistudio.singletrack.mxbkqr"
     minSdk = 26
     targetSdk = 36
-    versionCode = 20
-    versionName = "20.0"
+    versionCode = 21
+    versionName = "21.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -64,6 +64,13 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+  packaging {
+    jniLibs {
+      // PathIterator / graphics-path native code is unused in this app (stripped by R8);
+      // excluding the unused .so removes Play Store native debug-symbol warnings.
+      excludes += "**/libandroidx.graphics.path.so"
+    }
   }
 }
 

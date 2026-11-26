@@ -176,11 +176,14 @@ fun DrawScope.mapToScreenOffset(unrotated: Offset, rotationDegrees: Float): Offs
     return Offset(projected.x, projected.y)
 }
 
+private val BadgeBorderStroke = Stroke(width = 2.5f)
+
 fun DrawScope.drawMapLabelBadge(
     measured: TextLayoutResult,
     anchor: Offset,
     badgeAlpha: Float = 0.88f,
-    badgeColor: Color = TopoMapBadgeScrim
+    badgeColor: Color = TopoMapBadgeScrim,
+    borderColor: Color? = null
 ) {
     val w = size.width
     val h = size.height
@@ -195,12 +198,24 @@ fun DrawScope.drawMapLabelBadge(
         ),
         y = (anchor.y - measured.size.height - 16f).coerceAtLeast(8f)
     )
+    val badgeTopLeft = Offset(tl.x - padH, tl.y - padV)
+    val badgeSize = Size(measured.size.width + padH * 2, measured.size.height + padV * 2)
+    val corner = CornerRadius(8f, 8f)
     drawRoundRect(
         color = badgeColor.copy(alpha = badgeAlpha),
-        topLeft = Offset(tl.x - padH, tl.y - padV),
-        size = Size(measured.size.width + padH * 2, measured.size.height + padV * 2),
-        cornerRadius = CornerRadius(8f, 8f)
+        topLeft = badgeTopLeft,
+        size = badgeSize,
+        cornerRadius = corner
     )
+    if (borderColor != null) {
+        drawRoundRect(
+            color = borderColor,
+            topLeft = badgeTopLeft,
+            size = badgeSize,
+            cornerRadius = corner,
+            style = BadgeBorderStroke
+        )
+    }
     drawText(
         textLayoutResult = measured,
         color = Color.White,

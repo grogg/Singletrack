@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -54,6 +56,8 @@ import com.example.ui.components.TrailRadarMap
 import com.example.ui.components.UnitSettingsDialog
 import com.example.ui.screens.LiveRideCockpitScreen
 import com.example.ui.screens.RideScreen
+import com.example.ui.theme.SelectedTrailOrange
+import com.example.ui.theme.SelectedTrailOrangeGlow
 import com.example.ui.theme.SingletrackTheme
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
@@ -621,5 +625,96 @@ class SingletrackAppRobolectricTest {
         composeRule.onNodeWithTag("ride_map_compass_button")
             .assertIsDisplayed()
             .assertContentDescriptionContains("North up", substring = true)
+    }
+
+    @Test
+    fun `trail radar map highlights selected trail in bright orange and switches selection on tap`() {
+        assertTrue(SelectedTrailOrange.red >= 0.99f)
+        assertTrue(SelectedTrailOrange.green in 0.35f..0.55f)
+        assertTrue(SelectedTrailOrange.blue <= 0.05f)
+        assertTrue(SelectedTrailOrangeGlow.red >= 0.99f)
+        assertTrue(SelectedTrailOrangeGlow.green >= 0.55f)
+
+        val origin = LocationPlace("Moab, UT", 38.5733, -109.5498)
+        val trailA = Trail(
+            osmKey = "way/101",
+            osmType = "way",
+            osmId = 101L,
+            name = "Amasa Back",
+            difficulty = TrailDifficulty.ADVANCED,
+            rawDifficultyTag = "mtb:scale=3",
+            surface = "Slickrock",
+            centerLat = 38.5733,
+            centerLon = -109.5498,
+            distanceFromUserMiles = 0.5,
+            bearingDegrees = 45.0,
+            bearingCardinal = "NE",
+            lengthMiles = 4.2,
+            operatorName = null,
+            networkName = null,
+            description = null,
+            oneway = null,
+            uphillScale = null,
+            isDesignatedMtb = true,
+            geometry = listOf(
+                GeoPoint(38.5700, -109.5530),
+                GeoPoint(38.5733, -109.5498),
+                GeoPoint(38.5766, -109.5466)
+            )
+        )
+        val trailB = Trail(
+            osmKey = "way/202",
+            osmType = "way",
+            osmId = 202L,
+            name = "Captain Ahab",
+            difficulty = TrailDifficulty.EXPERT,
+            rawDifficultyTag = "mtb:scale=4",
+            surface = "Rock",
+            centerLat = 38.5600,
+            centerLon = -109.5600,
+            distanceFromUserMiles = 1.4,
+            bearingDegrees = 220.0,
+            bearingCardinal = "SW",
+            lengthMiles = 4.5,
+            operatorName = null,
+            networkName = null,
+            description = null,
+            oneway = "yes",
+            uphillScale = null,
+            isDesignatedMtb = true,
+            geometry = listOf(
+                GeoPoint(38.5580, -109.5620),
+                GeoPoint(38.5620, -109.5580)
+            )
+        )
+
+        var openedTrailKey: String? = null
+
+        composeRule.setContent {
+            SingletrackTheme {
+                TrailRadarMap(
+                    trails = listOf(trailB, trailA),
+                    origin = origin,
+                    initialSelectedTrail = null,
+                    onOpenTrailDetail = { openedTrailKey = it.osmKey },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp)
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("selected_trail_preview_card").assertIsDisplayed()
+        composeRule.onNodeWithText("Captain Ahab").assertIsDisplayed()
+
+        // Tap center of map where trailA is located (origin == trailA.center)
+        composeRule.onNodeWithTag("trail_radar_map").performTouchInput {
+            click(Offset(centerX, centerY))
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Amasa Back").assertIsDisplayed()
+        composeRule.onNodeWithTag("radar_open_trail_button").performClick()
+        assertEquals("way/101", openedTrailKey)
     }
 }

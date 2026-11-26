@@ -88,6 +88,10 @@ fun TrailShapeCanvas(
 
     val gridColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
     val surfaceBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val containerColor = MaterialTheme.colorScheme.surfaceContainer
+    val surfaceBrush = remember(surfaceBg, containerColor) {
+        Brush.linearGradient(colors = listOf(surfaceBg, containerColor))
+    }
     val startColor = DifficultyEasyColor
     val endColor = lineColor
     val glowStroke = remember {
@@ -101,11 +105,7 @@ fun TrailShapeCanvas(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(18.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(surfaceBg, MaterialTheme.colorScheme.surfaceContainer)
-                )
-            )
+            .background(surfaceBrush)
             .semantics { contentDescription = "Topographic route shape preview" }
     ) {
         if (shapeData.totalPoints < 2) {

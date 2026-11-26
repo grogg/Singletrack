@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -80,6 +81,8 @@ import com.example.ui.theme.DifficultyExpertColor
 import com.example.ui.theme.DifficultyIntermediateColor
 import com.example.ui.theme.DifficultyUnratedColor
 import com.example.ui.theme.PineDeep
+import com.example.ui.theme.SelectedTrailOrange
+import com.example.ui.theme.SelectedTrailOrangeGlow
 import com.example.ui.theme.Terracotta
 import com.example.ui.theme.TopoMapBadgeScrim
 import com.example.ui.theme.TopoMapFallbackDark
@@ -115,8 +118,13 @@ fun TrailRadarMap(
     var centerLon by remember(origin, initialSelectedTrail?.osmKey) { mutableDoubleStateOf(startLon) }
     var zoom by remember(origin, initialSelectedTrail?.osmKey) { mutableFloatStateOf(startZoom) }
     var rotationDegrees by remember(origin, initialSelectedTrail?.osmKey) { mutableFloatStateOf(0f) }
-    var selectedPin by remember(trails, initialSelectedTrail?.osmKey) {
-        mutableStateOf(initialSelectedTrail ?: trails.firstOrNull())
+    var selectedPinOsmKey by remember(initialSelectedTrail?.osmKey) {
+        mutableStateOf(initialSelectedTrail?.osmKey ?: trails.firstOrNull()?.osmKey)
+    }
+    val selectedPin = remember(trails, initialSelectedTrail, selectedPinOsmKey) {
+        trails.firstOrNull { it.osmKey == selectedPinOsmKey }
+            ?: initialSelectedTrail?.takeIf { selectedPinOsmKey == null || selectedPinOsmKey == it.osmKey }
+            ?: trails.firstOrNull()
     }
 
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -156,17 +164,17 @@ fun TrailRadarMap(
     val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f) }
     val ring10Stroke = remember(dashEffect) { Stroke(width = 2.5f, pathEffect = dashEffect) }
     val ring20Stroke = remember(dashEffect) { Stroke(width = 4f, pathEffect = dashEffect) }
-    val selectedHaloStroke = remember { Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
-    val selectedCasingStroke = remember { Stroke(width = 10.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
-    val selectedCoreStroke = remember { Stroke(width = 6.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val selectedHaloStroke = remember { Stroke(width = 22f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val selectedCasingStroke = remember { Stroke(width = 11.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
+    val selectedCoreStroke = remember { Stroke(width = 7.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
     val unselectedCasingStroke = remember { Stroke(width = 6.5f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
     val unselectedCoreStroke = remember { Stroke(width = 3.8f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
     val reusablePath = remember { Path() }
     val unselectedTrails = remember(trails, selectedPin?.osmKey) {
         trails.filter { it.osmKey != selectedPin?.osmKey }
     }
-    val labelLayoutCache = remember(trails, routeLabelStyle) {
-        HashMap<String, TextLayoutResult>()
+    val labelLayoutCache = remember(routeLabelStyle) {
+        android.util.LruCache<String, TextLayoutResult>(64)
     }
 
     val containerShape = if (isFullScreen) RoundedCornerShape(0.dp) else RoundedCornerShape(22.dp)
@@ -262,7 +270,7 @@ fun TrailRadarMap(
                         }
 
                         if (bestTrail != null) {
-                            selectedPin = bestTrail
+                            selectedPinOsmKey = bestTrail.osmKey
                         }
                     }
                 }
@@ -304,11 +312,12 @@ fun TrailRadarMap(
                     stroke = ring20Stroke
                 )
 
-                // 3. Draw unselected trail routes first, then selected trail route on top
+                // 3. Draw unselected trail routes first, then highlight selected trail in bright orange on top
                 for (trail in unselectedTrails) {
                     drawTrailOverlay(
                         trail = trail,
                         color = routeColor(trail.difficulty),
+                        haloColor = SelectedTrailOrangeGlow,
                         isSelected = false,
                         reusablePath = reusablePath,
                         haloStroke = selectedHaloStroke,
@@ -320,7 +329,8 @@ fun TrailRadarMap(
                 selectedPin?.let { selected ->
                     drawTrailOverlay(
                         trail = selected,
-                        color = routeColor(selected.difficulty),
+                        color = SelectedTrailOrange,
+                        haloColor = SelectedTrailOrangeGlow,
                         isSelected = true,
                         reusablePath = reusablePath,
                         haloStroke = selectedHaloStroke,
@@ -343,27 +353,32 @@ fun TrailRadarMap(
 
             // 4. Draw upright trail name labels when zoomed in or in full-screen
             if (isFullScreen || zoom >= 12.0f) {
-                fun drawTrailLabel(trail: Trail, badgeAlpha: Float) {
+                fun drawTrailLabel(trail: Trail, badgeAlpha: Float, borderColor: Color? = null) {
                     val pos = mapToScreenOffset(
                         unrotated = toUnrotatedMap(GeoPoint(trail.centerLat, trail.centerLon)),
                         rotationDegrees = rotationDegrees
                     )
                     val labelText = trail.name.take(26)
-                    val measured = labelLayoutCache.getOrPut(labelText) {
-                        textMeasurer.measure(
-                            text = labelText,
-                            style = routeLabelStyle
-                        )
-                    }
+                    val measured = labelLayoutCache.get(labelText) ?: textMeasurer.measure(
+                        text = labelText,
+                        style = routeLabelStyle
+                    ).also { labelLayoutCache.put(labelText, it) }
                     drawMapLabelBadge(
                         measured = measured,
                         anchor = pos,
                         badgeAlpha = badgeAlpha,
-                        badgeColor = TopoMapBadgeScrim
+                        badgeColor = TopoMapBadgeScrim,
+                        borderColor = borderColor
                     )
                 }
 
-                selectedPin?.let { drawTrailLabel(it, badgeAlpha = 0.92f) }
+                selectedPin?.let {
+                    drawTrailLabel(
+                        trail = it,
+                        badgeAlpha = 0.96f,
+                        borderColor = SelectedTrailOrange
+                    )
+                }
                 if (zoom >= 12.2f) {
                     val maxUnselectedLabels = minOf(14, unselectedTrails.size)
                     for (i in 0 until maxUnselectedLabels) {
@@ -503,8 +518,10 @@ fun TrailRadarMap(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .fillMaxWidth()
-                        .padding(12.dp),
+                        .padding(12.dp)
+                        .testTag("selected_trail_preview_card"),
                     shape = RoundedCornerShape(18.dp),
+                    border = BorderStroke(1.5.dp, SelectedTrailOrange.copy(alpha = 0.72f)),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
                         contentColor = MaterialTheme.colorScheme.onSurface
@@ -589,6 +606,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGeodesicRing(
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTrailOverlay(
     trail: Trail,
     color: Color,
+    haloColor: Color,
     isSelected: Boolean,
     reusablePath: Path,
     haloStroke: Stroke,
@@ -617,7 +635,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTrailOverlay(
         if (isSelected) {
             drawPath(
                 path = reusablePath,
-                color = Terracotta.copy(alpha = 0.35f),
+                color = haloColor.copy(alpha = 0.50f),
                 style = haloStroke
             )
         }
@@ -637,16 +655,16 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawTrailOverlay(
 
     val pinOffset = toScreen(GeoPoint(trail.centerLat, trail.centerLon))
     if (isSelected) {
-        drawCircle(color = Terracotta.copy(alpha = 0.30f), radius = 20f, center = pinOffset)
+        drawCircle(color = haloColor.copy(alpha = 0.42f), radius = 24f, center = pinOffset)
     }
     drawCircle(
         color = Color.White,
-        radius = if (isSelected) 11f else 7.5f,
+        radius = if (isSelected) 13f else 7.5f,
         center = pinOffset
     )
     drawCircle(
         color = color,
-        radius = if (isSelected) 8f else 5f,
+        radius = if (isSelected) 9.5f else 5f,
         center = pinOffset
     )
 }
