@@ -347,6 +347,12 @@ private fun ElevationChartCanvas(
     val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f) }
     val strokePath = remember { Path() }
     val fillPath = remember { Path() }
+    val fillBrushColors = remember(lineColor) {
+        listOf(
+            lineColor.copy(alpha = 0.34f),
+            lineColor.copy(alpha = 0.03f)
+        )
+    }
     val lineStroke = remember(density) {
         Stroke(
             width = with(density) { 2.6.dp.toPx() },
@@ -419,10 +425,7 @@ private fun ElevationChartCanvas(
                 drawPath(
                     path = fillPath,
                     brush = Brush.verticalGradient(
-                        colors = listOf(
-                            lineColor.copy(alpha = 0.34f),
-                            lineColor.copy(alpha = 0.03f)
-                        ),
+                        colors = fillBrushColors,
                         startY = padTop,
                         endY = padTop + chartHeight
                     )

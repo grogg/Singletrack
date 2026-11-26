@@ -8,8 +8,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasTestTag
@@ -21,6 +26,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.export.GpxExporter
 import com.example.data.export.GpxTrackParser
@@ -35,11 +41,16 @@ import com.example.domain.model.BleSensorUiState
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.GpxNavigationState
 import com.example.domain.model.GpxWaypoint
+import com.example.domain.model.LocationPlace
 import com.example.domain.model.MeasurementUnit
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
+import com.example.ui.components.GpxNavigatorTopoMap
+import com.example.ui.components.MapCompassButton
+import com.example.ui.components.RecordedRideTopoMap
 import com.example.ui.components.TrailNavigationHelper
+import com.example.ui.components.TrailRadarMap
 import com.example.ui.components.UnitSettingsDialog
 import com.example.ui.screens.LiveRideCockpitScreen
 import com.example.ui.screens.RideScreen
@@ -485,5 +496,130 @@ class SingletrackAppRobolectricTest {
                 composeRule.activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             )
         }
+    }
+
+    @Test
+    fun `gpx navigator topo map renders in 2D without 3D toggle`() {
+        val track = GpxTrackParser.buildTrack(
+            id = "track-2d-1",
+            name = "Porcupine Rim",
+            fileName = "porcupine.gpx",
+            rawPoints = listOf(
+                Triple(38.5700, -109.5500, 1200.0),
+                Triple(38.5735, -109.5470, 1245.0),
+                Triple(38.5770, -109.5440, 1290.0)
+            ),
+            waypoints = listOf(GpxWaypoint(38.5735, -109.5470, "Overlook", null))
+        )
+        val navState = GpxNavigationEngine.idleState(track).copy(
+            isNavigating = true,
+            userLocation = GeoPoint(38.5715, -109.5485),
+            userHeadingDegrees = 40f,
+            bearingToTargetDegrees = 42.0,
+            nearestPointOnTrack = GeoPoint(38.5715, -109.5485)
+        )
+
+        composeRule.setContent {
+            SingletrackTheme {
+                GpxNavigatorTopoMap(
+                    track = track,
+                    navigationState = navState,
+                    measurementUnit = MeasurementUnit.IMPERIAL,
+                    onToggleFollowLocation = {},
+                    onDisableFollowLocation = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("gpx_navigator_map").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_compass_button")
+            .assertIsDisplayed()
+            .assertContentDescriptionContains("North up", substring = true)
+        composeRule.onNodeWithTag("gpx_toggle_follow_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_zoom_in_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_zoom_out_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_recenter_map_button").assertIsDisplayed()
+        composeRule.onNodeWithText("© OpenTopoMap • OSM").assertIsDisplayed()
+        composeRule.onNodeWithTag("gpx_toggle_3d_pov_button").assertDoesNotExist()
+        composeRule.onNodeWithText("3D").assertDoesNotExist()
+        composeRule.onNodeWithText("2D").assertDoesNotExist()
+        composeRule.onNodeWithText("3D POV • © OpenTopoMap • OSM").assertDoesNotExist()
+    }
+
+    @Test
+    fun `map compass button defaults north up and resets rotated map back to north`() {
+        val rotationState = mutableStateOf(0f)
+
+        composeRule.setContent {
+            SingletrackTheme {
+                MapCompassButton(
+                    rotationDegrees = rotationState.value,
+                    onResetNorth = { rotationState.value = 0f },
+                    testTag = "test_compass_btn"
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("test_compass_btn")
+            .assertIsDisplayed()
+            .assertContentDescriptionContains("North up", substring = true)
+
+        rotationState.value = 42f
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("test_compass_btn")
+            .assertContentDescriptionContains("42 degrees", substring = true)
+            .performClick()
+
+        composeRule.waitForIdle()
+        assertEquals(0f, rotationState.value, 0.001f)
+        composeRule.onNodeWithTag("test_compass_btn")
+            .assertContentDescriptionContains("North up", substring = true)
+    }
+
+    @Test
+    fun `trail radar map and recorded ride map display north-up compass controls`() {
+        val origin = LocationPlace("Moab, UT", 38.5733, -109.5498)
+        val ride = RecordedRide(
+            id = "ride-rot-1",
+            title = "Moab Ride",
+            trailName = "Slickrock",
+            startTimeMillis = 1700000000000L,
+            endTimeMillis = 1700000600000L,
+            durationSeconds = 600L,
+            distanceMiles = 2.0,
+            avgSpeedMph = 12.0,
+            maxSpeedMph = 18.0,
+            elevationGainFeet = 300.0,
+            routePoints = listOf(GeoPoint(38.57, -109.55), GeoPoint(38.58, -109.54))
+        )
+
+        composeRule.setContent {
+            SingletrackTheme {
+                Column {
+                    TrailRadarMap(
+                        trails = emptyList(),
+                        origin = origin,
+                        onOpenTrailDetail = {},
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                    )
+                    RecordedRideTopoMap(
+                        ride = ride,
+                        measurementUnit = MeasurementUnit.IMPERIAL,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(240.dp)
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("map_compass_button")
+            .assertIsDisplayed()
+            .assertContentDescriptionContains("North up", substring = true)
+        composeRule.onNodeWithTag("ride_map_compass_button")
+            .assertIsDisplayed()
+            .assertContentDescriptionContains("North up", substring = true)
     }
 }

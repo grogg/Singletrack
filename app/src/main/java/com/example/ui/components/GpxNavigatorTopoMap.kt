@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -42,13 +41,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -75,6 +77,8 @@ import com.example.ui.theme.TerracottaBright
 import com.example.ui.theme.TopoMapFallbackDark
 import com.example.ui.theme.TopoMapFallbackLight
 import com.example.ui.theme.WaypointAmber
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun GpxNavigatorTopoMap(
@@ -102,6 +106,7 @@ fun GpxNavigatorTopoMap(
     var centerLat by remember(track.id, initialCamera) { mutableDoubleStateOf(initialCamera.centerLat) }
     var centerLon by remember(track.id, initialCamera) { mutableDoubleStateOf(initialCamera.centerLon) }
     var zoom by remember(track.id, initialCamera) { mutableFloatStateOf(initialCamera.zoom) }
+    var rotationDegrees by remember(track.id, initialCamera) { mutableFloatStateOf(0f) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
     LaunchedEffect(
@@ -134,11 +139,13 @@ fun GpxNavigatorTopoMap(
         canvasSize = canvasSize,
         baseTilePx = baseTilePx,
         tileLoader = tileLoader,
+        rotationDegrees = rotationDegrees,
         enabled = routeGeoPoints.isNotEmpty()
     )
 
     val reusableRemainingPath = remember { Path() }
     val reusableCompletedPath = remember { Path() }
+    val reusableHeadingConePath = remember { Path() }
     val haloStroke = remember { Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
     val casingStroke = remember { Stroke(width = 10f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
     val coreStroke = remember { Stroke(width = 6f, cap = StrokeCap.Round, join = StrokeJoin.Round) }
@@ -148,7 +155,7 @@ fun GpxNavigatorTopoMap(
     val finishBadgeLayout = remember(labelStyle) { textMeasurer.measure("FINISH", labelStyle) }
     val waypointLayouts = remember(track.waypoints, labelStyle) {
         track.waypoints.take(10).map { wpt ->
-            wpt to textMeasurer.measure(wpt.name.take(18), labelStyle)
+            GeoPoint(wpt.lat, wpt.lon) to textMeasurer.measure(wpt.name.take(18), labelStyle)
         }
     }
 
@@ -168,14 +175,15 @@ fun GpxNavigatorTopoMap(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .clipToBounds()
                 .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
-                    detectTransformGestures { centroid, pan, gestureZoom, _ ->
+                    detectTransformGestures { centroid, pan, gestureZoom, gestureRotation ->
                         if (pan != Offset.Zero) {
                             onDisableFollowLocation()
                         }
                         val updated = WebMercatorUtils.applyPinchPanZoom(
-                            current = MapCameraState(centerLat, centerLon, zoom),
+                            current = MapCameraState(centerLat, centerLon, zoom, rotationDegrees),
                             viewportWidth = size.width.toFloat(),
                             viewportHeight = size.height.toFloat(),
                             centroidX = centroid.x,
@@ -183,130 +191,155 @@ fun GpxNavigatorTopoMap(
                             panX = pan.x,
                             panY = pan.y,
                             gestureZoom = gestureZoom,
-                            baseTilePx = baseTilePx
+                            baseTilePx = baseTilePx,
+                            gestureRotation = gestureRotation
                         )
                         centerLat = updated.centerLat
                         centerLon = updated.centerLon
                         zoom = updated.zoom
+                        rotationDegrees = updated.rotationDegrees
                     }
                 }
         ) {
-            drawTopoTileBackdrop(
-                overlayState = tileOverlayState,
-                centerLat = centerLat,
-                centerLon = centerLon,
-                zoom = zoom,
-                baseTilePx = baseTilePx,
-                contourColor = contourColor,
-                isDark = isDark
-            )
-
-            if (routeGeoPoints.isEmpty()) return@Canvas
+            drawFallbackTopoGrid(contourColor)
 
             val w = size.width
             val h = size.height
-            val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
-            val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
-            fun toScreen(pt: GeoPoint): Offset {
-                val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
-                val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
+            val zoomDouble = zoom.toDouble()
+            val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoomDouble)
+            val cTileY = WebMercatorUtils.latToTileY(centerLat, zoomDouble)
+            fun toUnrotatedMap(pt: GeoPoint): Offset {
+                val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, zoomDouble) - cTileX) * baseTilePx).toFloat()
+                val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, zoomDouble) - cTileY) * baseTilePx).toFloat()
                 return Offset(px, py)
             }
 
-            val splitIdx = navigationState.nearestSegmentIndex.coerceIn(0, (routeGeoPoints.lastIndex - 1).coerceAtLeast(0))
-            val splitAnchor = navigationState.nearestPointOnTrack
-
-            // 1. Remaining / Full route path
-            if (routeGeoPoints.size >= 2) {
-                reusableRemainingPath.reset()
-                if (navigationState.isNavigating && splitAnchor != null) {
-                    val startScreen = toScreen(splitAnchor)
-                    reusableRemainingPath.moveTo(startScreen.x, startScreen.y)
-                    for (i in (splitIdx + 1) until routeGeoPoints.size) {
-                        val pt = toScreen(routeGeoPoints[i])
-                        reusableRemainingPath.lineTo(pt.x, pt.y)
-                    }
-                } else {
-                    val first = toScreen(routeGeoPoints.first())
-                    reusableRemainingPath.moveTo(first.x, first.y)
-                    for (i in 1 until routeGeoPoints.size) {
-                        val pt = toScreen(routeGeoPoints[i])
-                        reusableRemainingPath.lineTo(pt.x, pt.y)
-                    }
-                }
-
-                drawPath(path = reusableRemainingPath, color = routeAccent.copy(alpha = 0.28f), style = haloStroke)
-                drawPath(path = reusableRemainingPath, color = Color.White.copy(alpha = 0.96f), style = casingStroke)
-                drawPath(path = reusableRemainingPath, color = routeAccent, style = coreStroke)
-
-                // 2. Completed progress segment while navigating
-                if (navigationState.isNavigating && (splitIdx > 0 || splitAnchor != null)) {
-                    reusableCompletedPath.reset()
-                    val first = toScreen(routeGeoPoints.first())
-                    reusableCompletedPath.moveTo(first.x, first.y)
-                    for (i in 1..splitIdx) {
-                        val pt = toScreen(routeGeoPoints[i])
-                        reusableCompletedPath.lineTo(pt.x, pt.y)
-                    }
-                    if (splitAnchor != null) {
-                        val anchorScreen = toScreen(splitAnchor)
-                        reusableCompletedPath.lineTo(anchorScreen.x, anchorScreen.y)
-                    }
-                    drawPath(path = reusableCompletedPath, color = Color.White.copy(alpha = 0.95f), style = casingStroke)
-                    drawPath(path = reusableCompletedPath, color = completedAccent, style = coreStroke)
-                }
-            }
-
-            // 3. Connector line from user location back to track / target if approaching or off-route
             val userLoc = navigationState.userLocation
-            val targetLoc = navigationState.targetPoint
-            if (navigationState.isNavigating && userLoc != null && targetLoc != null &&
-                (navigationState.routeStatus == GpxRouteStatus.OFF_ROUTE ||
-                    navigationState.routeStatus == GpxRouteStatus.APPROACHING_START)
-            ) {
-                drawLine(
-                    color = RiderBeaconBlue,
-                    start = toScreen(userLoc),
-                    end = toScreen(targetLoc),
-                    strokeWidth = 5f,
-                    pathEffect = dashedTargetEffect
+
+            rotate(degrees = rotationDegrees, pivot = Offset(w / 2f, h / 2f)) {
+                drawTopoTileBackdrop(
+                    overlayState = tileOverlayState,
+                    centerLat = centerLat,
+                    centerLon = centerLon,
+                    zoom = zoom,
+                    baseTilePx = baseTilePx
                 )
+
+                if (routeGeoPoints.isNotEmpty()) {
+                    val splitIdx = navigationState.nearestSegmentIndex.coerceIn(0, (routeGeoPoints.lastIndex - 1).coerceAtLeast(0))
+                    val splitAnchor = navigationState.nearestPointOnTrack
+
+                    // 1. Remaining / Full route path
+                    if (routeGeoPoints.size >= 2) {
+                        val anchor = if (navigationState.isNavigating) splitAnchor else null
+                        val startIdx = if (anchor != null) splitIdx + 1 else 1
+                        if (anchor == null || startIdx < routeGeoPoints.size) {
+                            reusableRemainingPath.reset()
+                            val firstPt = toUnrotatedMap(anchor ?: routeGeoPoints[0])
+                            reusableRemainingPath.moveTo(firstPt.x, firstPt.y)
+                            for (i in startIdx until routeGeoPoints.size) {
+                                val nextPt = toUnrotatedMap(routeGeoPoints[i])
+                                reusableRemainingPath.lineTo(nextPt.x, nextPt.y)
+                            }
+                            drawPath(path = reusableRemainingPath, color = routeAccent.copy(alpha = 0.30f), style = haloStroke)
+                            drawPath(path = reusableRemainingPath, color = Color.White.copy(alpha = 0.96f), style = casingStroke)
+                            drawPath(path = reusableRemainingPath, color = routeAccent, style = coreStroke)
+                        }
+
+                        // 2. Completed progress segment while navigating
+                        if (navigationState.isNavigating && (splitIdx > 0 || splitAnchor != null)) {
+                            reusableCompletedPath.reset()
+                            val firstDone = toUnrotatedMap(routeGeoPoints[0])
+                            reusableCompletedPath.moveTo(firstDone.x, firstDone.y)
+                            val clampedSplit = splitIdx.coerceAtMost(routeGeoPoints.lastIndex)
+                            for (i in 1..clampedSplit) {
+                                val pt = toUnrotatedMap(routeGeoPoints[i])
+                                reusableCompletedPath.lineTo(pt.x, pt.y)
+                            }
+                            if (splitAnchor != null) {
+                                val anchorPt = toUnrotatedMap(splitAnchor)
+                                reusableCompletedPath.lineTo(anchorPt.x, anchorPt.y)
+                            }
+                            drawPath(path = reusableCompletedPath, color = Color.White.copy(alpha = 0.95f), style = casingStroke)
+                            drawPath(path = reusableCompletedPath, color = completedAccent, style = coreStroke)
+                        }
+                    }
+
+                    // 3. Connector line from user location back to track / target if approaching or off-route
+                    val targetLoc = navigationState.targetPoint
+                    if (navigationState.isNavigating && userLoc != null && targetLoc != null &&
+                        (navigationState.routeStatus == GpxRouteStatus.OFF_ROUTE ||
+                            navigationState.routeStatus == GpxRouteStatus.APPROACHING_START)
+                    ) {
+                        drawLine(
+                            color = RiderBeaconBlue,
+                            start = toUnrotatedMap(userLoc),
+                            end = toUnrotatedMap(targetLoc),
+                            strokeWidth = 5f,
+                            pathEffect = dashedTargetEffect
+                        )
+                    }
+
+                    // 4. GPX Waypoints
+                    for (i in waypointLayouts.indices) {
+                        val (wptGeo, _) = waypointLayouts[i]
+                        val pt = toUnrotatedMap(wptGeo)
+                        drawCircle(color = Color.White, radius = 10f, center = pt)
+                        drawCircle(color = WaypointAmber, radius = 6.5f, center = pt)
+                    }
+
+                    // 5. Start and Finish markers
+                    val startPt = toUnrotatedMap(routeGeoPoints.first())
+                    drawCircle(color = Color.White, radius = 12f, center = startPt)
+                    drawCircle(color = DifficultyEasyColor, radius = 8f, center = startPt)
+
+                    val endPt = if (routeGeoPoints.size >= 2) toUnrotatedMap(routeGeoPoints.last()) else null
+                    if (endPt != null) {
+                        drawCircle(color = Color.White, radius = 12f, center = endPt)
+                        drawCircle(color = routeAccent, radius = 8f, center = endPt)
+                    }
+
+                    // 6. Rider GPS Beacon & 2D directional heading cone
+                    if (userLoc != null) {
+                        val userPt = toUnrotatedMap(userLoc)
+                        val riderHeading = navigationState.userHeadingDegrees
+                            ?: navigationState.bearingToTargetDegrees?.toFloat()
+                        if (riderHeading != null) {
+                            drawRiderHeadingCone(
+                                userPt = userPt,
+                                headingDeg = riderHeading,
+                                coneRadius = 46f,
+                                path = reusableHeadingConePath
+                            )
+                        }
+                        drawCircle(color = RiderBeaconBlue.copy(alpha = 0.24f), radius = 26f, center = userPt)
+                        drawCircle(color = Color.White, radius = 13f, center = userPt)
+                        drawCircle(color = RiderBeaconBlue, radius = 9f, center = userPt)
+                    }
+                }
             }
 
-            // 4. GPX Waypoints
-            waypointLayouts.forEach { (wpt, measured) ->
-                val pt = toScreen(GeoPoint(wpt.lat, wpt.lon))
-                drawCircle(color = Color.White, radius = 10f, center = pt)
-                drawCircle(color = WaypointAmber, radius = 6.5f, center = pt)
+            if (isDark) {
+                drawRect(color = Color.Black.copy(alpha = 0.20f))
+            }
+
+            if (routeGeoPoints.isNotEmpty()) {
                 if (isFullScreen || zoom >= 13.0f) {
-                    drawMapLabelBadge(measured = measured, anchor = pt, badgeAlpha = 0.86f)
+                    for (i in waypointLayouts.indices) {
+                        val (wptGeo, measured) = waypointLayouts[i]
+                        val pt = mapToScreenOffset(toUnrotatedMap(wptGeo), rotationDegrees)
+                        drawMapLabelBadge(measured = measured, anchor = pt, badgeAlpha = 0.86f)
+                    }
                 }
-            }
 
-            // 5. Start and Finish markers
-            val startPt = toScreen(routeGeoPoints.first())
-            val endPt = toScreen(routeGeoPoints.last())
-            drawCircle(color = Color.White, radius = 12f, center = startPt)
-            drawCircle(color = DifficultyEasyColor, radius = 8f, center = startPt)
-
-            if (routeGeoPoints.size >= 2) {
-                drawCircle(color = Color.White, radius = 12f, center = endPt)
-                drawCircle(color = routeAccent, radius = 8f, center = endPt)
-            }
-
-            if (isFullScreen || zoom >= 12.2f) {
-                drawMapLabelBadge(measured = startBadgeLayout, anchor = startPt)
-                if (routeGeoPoints.size >= 2) {
-                    drawMapLabelBadge(measured = finishBadgeLayout, anchor = endPt)
+                if (isFullScreen || zoom >= 12.2f) {
+                    val startScreen = mapToScreenOffset(toUnrotatedMap(routeGeoPoints.first()), rotationDegrees)
+                    drawMapLabelBadge(measured = startBadgeLayout, anchor = startScreen)
+                    if (routeGeoPoints.size >= 2) {
+                        val endScreen = mapToScreenOffset(toUnrotatedMap(routeGeoPoints.last()), rotationDegrees)
+                        drawMapLabelBadge(measured = finishBadgeLayout, anchor = endScreen)
+                    }
                 }
-            }
-
-            // 6. Rider GPS Beacon
-            if (userLoc != null) {
-                val userPt = toScreen(userLoc)
-                drawCircle(color = RiderBeaconBlue.copy(alpha = 0.24f), radius = 28f, center = userPt)
-                drawCircle(color = Color.White, radius = 13f, center = userPt)
-                drawCircle(color = RiderBeaconBlue, radius = 9f, center = userPt)
             }
         }
 
@@ -320,7 +353,12 @@ fun GpxNavigatorTopoMap(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(10.dp),
+                    .padding(
+                        start = 10.dp,
+                        top = 10.dp,
+                        bottom = 10.dp,
+                        end = if (isFullScreen && navigationState.isNavigating) 118.dp else 10.dp
+                    ),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (isFullScreen && navigationState.isNavigating) {
@@ -375,101 +413,143 @@ fun GpxNavigatorTopoMap(
                 )
             }
 
-            // Top-right Map Controls (48dp touch targets)
-            Column(
+            // Top-right Map Controls (48dp touch targets; max 4 vertical so inline 240dp never clips)
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top
             ) {
-                if (onToggleFullScreen != null) {
-                    FilledIconButton(
-                        onClick = onToggleFullScreen,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag(if (isFullScreen) "gpx_exit_fullscreen_button" else "gpx_expand_map_button")
-                    ) {
-                        Icon(
-                            imageVector = if (isFullScreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                            contentDescription = if (isFullScreen) "Exit full screen GPX map" else "Expand GPX map to full screen"
-                        )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    MapCompassButton(
+                        rotationDegrees = rotationDegrees,
+                        onResetNorth = { rotationDegrees = 0f },
+                        testTag = "gpx_compass_button"
+                    )
+
+                    if (navigationState.isNavigating) {
+                        FilledIconButton(
+                            onClick = onToggleFollowLocation,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = if (navigationState.followUserLocation) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+                                },
+                                contentColor = if (navigationState.followUserLocation) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            ),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("gpx_toggle_follow_button")
+                        ) {
+                            Icon(
+                                imageVector = if (navigationState.followUserLocation) Icons.Filled.GpsFixed else Icons.Filled.GpsNotFixed,
+                                contentDescription = if (navigationState.followUserLocation) "Disable GPS follow lock" else "Follow GPS position"
+                            )
+                        }
                     }
                 }
 
-                if (navigationState.isNavigating) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (onToggleFullScreen != null) {
+                        FilledIconButton(
+                            onClick = onToggleFullScreen,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag(if (isFullScreen) "gpx_exit_fullscreen_button" else "gpx_expand_map_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isFullScreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                                contentDescription = if (isFullScreen) "Exit full screen GPX map" else "Expand GPX map to full screen"
+                            )
+                        }
+                    }
+
                     FilledIconButton(
-                        onClick = onToggleFollowLocation,
+                        onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = if (navigationState.followUserLocation) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
-                            },
-                            contentColor = if (navigationState.followUserLocation) {
-                                MaterialTheme.colorScheme.onPrimary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            }
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier
                             .size(48.dp)
-                            .testTag("gpx_toggle_follow_button")
+                            .testTag("gpx_zoom_in_button")
                     ) {
-                        Icon(
-                            imageVector = if (navigationState.followUserLocation) Icons.Filled.GpsFixed else Icons.Filled.GpsNotFixed,
-                            contentDescription = if (navigationState.followUserLocation) "Disable GPS follow lock" else "Follow GPS position"
-                        )
+                        Icon(Icons.Filled.Add, contentDescription = "Zoom in GPX map")
                     }
-                }
 
-                FilledIconButton(
-                    onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("gpx_zoom_in_button")
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = "Zoom in GPX map")
-                }
+                    FilledIconButton(
+                        onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("gpx_zoom_out_button")
+                    ) {
+                        Icon(Icons.Filled.Remove, contentDescription = "Zoom out GPX map")
+                    }
 
-                FilledIconButton(
-                    onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("gpx_zoom_out_button")
-                ) {
-                    Icon(Icons.Filled.Remove, contentDescription = "Zoom out GPX map")
-                }
-
-                FilledIconButton(
-                    onClick = {
-                        onDisableFollowLocation()
-                        centerLat = initialCamera.centerLat
-                        centerLon = initialCamera.centerLon
-                        zoom = initialCamera.zoom
-                    },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("gpx_recenter_map_button")
-                ) {
-                    Icon(Icons.Filled.CenterFocusStrong, contentDescription = "Fit GPX route to screen")
+                    FilledIconButton(
+                        onClick = {
+                            onDisableFollowLocation()
+                            centerLat = initialCamera.centerLat
+                            centerLon = initialCamera.centerLon
+                            zoom = initialCamera.zoom
+                            rotationDegrees = 0f
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("gpx_recenter_map_button")
+                    ) {
+                        Icon(Icons.Filled.CenterFocusStrong, contentDescription = "Fit GPX route to screen")
+                    }
                 }
             }
         }
     }
+}
+
+private fun DrawScope.drawRiderHeadingCone(
+    userPt: Offset,
+    headingDeg: Float,
+    coneRadius: Float,
+    path: Path
+) {
+    val leftRad = Math.toRadians((headingDeg - 26f).toDouble())
+    val rightRad = Math.toRadians((headingDeg + 26f).toDouble())
+    val midRad = Math.toRadians(headingDeg.toDouble())
+    path.reset()
+    path.moveTo(userPt.x, userPt.y)
+    path.lineTo(
+        userPt.x + (sin(leftRad) * coneRadius).toFloat(),
+        userPt.y - (cos(leftRad) * coneRadius).toFloat()
+    )
+    path.lineTo(
+        userPt.x + (sin(midRad) * (coneRadius * 1.12f)).toFloat(),
+        userPt.y - (cos(midRad) * (coneRadius * 1.12f)).toFloat()
+    )
+    path.lineTo(
+        userPt.x + (sin(rightRad) * coneRadius).toFloat(),
+        userPt.y - (cos(rightRad) * coneRadius).toFloat()
+    )
+    path.close()
+    drawPath(
+        path = path,
+        color = RiderBeaconBlue.copy(alpha = 0.24f)
+    )
 }

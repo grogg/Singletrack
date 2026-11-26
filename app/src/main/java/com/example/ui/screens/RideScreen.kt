@@ -748,7 +748,6 @@ private fun RecordedRideCard(
                     )
                 }
             }
-
         }
     }
 }

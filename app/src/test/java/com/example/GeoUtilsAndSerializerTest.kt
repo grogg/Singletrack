@@ -392,6 +392,96 @@ class GeoUtilsAndSerializerTest {
         assertEquals(38.575, cam.centerLat, 0.0001)
         assertEquals(-109.545, cam.centerLon, 0.0001)
         assertTrue(cam.zoom in 12.0f..15.0f)
+        assertEquals(0f, cam.rotationDegrees, 0.0001f)
+    }
+
+    @Test
+    fun webMercatorUtils_rotationDefaultsNorthAndTransformsAccurately() {
+        assertEquals(0f, WebMercatorUtils.normalizeRotationDegrees(0f), 0.001f)
+        assertEquals(0f, WebMercatorUtils.normalizeRotationDegrees(360f), 0.001f)
+        assertEquals(90f, WebMercatorUtils.normalizeRotationDegrees(-270f), 0.001f)
+        assertEquals(-90f, WebMercatorUtils.normalizeRotationDegrees(270f), 0.001f)
+        assertEquals(180f, WebMercatorUtils.normalizeRotationDegrees(-180f), 0.001f)
+        assertEquals(0f, WebMercatorUtils.normalizeRotationDegrees(Float.NaN), 0.001f)
+
+        val lat = 38.57331
+        val lon = -109.51944
+        val rotated90 = WebMercatorUtils.applyPinchPanZoom(
+            current = MapCameraState(centerLat = lat, centerLon = lon, zoom = 12.0f),
+            viewportWidth = 800f,
+            viewportHeight = 600f,
+            centroidX = 400f,
+            centroidY = 300f,
+            panX = 0f,
+            panY = 0f,
+            gestureZoom = 1.0f,
+            baseTilePx = 256f,
+            gestureRotation = 90f
+        )
+        assertEquals(90f, rotated90.rotationDegrees, 0.001f)
+        assertEquals(lat, rotated90.centerLat, 0.0001)
+        assertEquals(lon, rotated90.centerLon, 0.0001)
+
+        // When rotated +90 deg clockwise (North points right), dragging right (+panX) shifts center south (smaller lat)
+        val pannedWhileRotated = WebMercatorUtils.applyPinchPanZoom(
+            current = rotated90,
+            viewportWidth = 800f,
+            viewportHeight = 600f,
+            centroidX = 400f,
+            centroidY = 300f,
+            panX = 128f,
+            panY = 0f,
+            gestureZoom = 1.0f,
+            baseTilePx = 256f,
+            gestureRotation = 0f
+        )
+        assertEquals(90f, pannedWhileRotated.rotationDegrees, 0.001f)
+        assertTrue(pannedWhileRotated.centerLat < lat)
+        assertEquals(lon, pannedWhileRotated.centerLon, 0.0001)
+
+        // Round-trip screen <-> unrotated map offset at arbitrary angle
+        val screenPt = WebMercatorUtils.mapOffsetToScreen(
+            unrotatedX = 400f,
+            unrotatedY = 200f, // 100px North of (400, 300) center
+            viewportWidth = 800f,
+            viewportHeight = 600f,
+            rotationDegrees = 90f
+        )
+        assertEquals(500f, screenPt.x, 0.01f)
+        assertEquals(300f, screenPt.y, 0.01f)
+
+        val unrotated = WebMercatorUtils.screenToUnrotatedMapOffset(
+            screenX = screenPt.x,
+            screenY = screenPt.y,
+            viewportWidth = 800f,
+            viewportHeight = 600f,
+            rotationDegrees = 90f
+        )
+        assertEquals(400f, unrotated.x, 0.01f)
+        assertEquals(200f, unrotated.y, 0.01f)
+
+        // Rotated viewport includes at least as many tiles to cover corners
+        val northTiles = WebMercatorUtils.computeVisibleTiles(
+            centerLat = lat,
+            centerLon = lon,
+            zoom = 12.0f,
+            tileZoom = 12,
+            baseTilePx = 256f,
+            viewportWidth = 800f,
+            viewportHeight = 1400f,
+            rotationDegrees = 0f
+        )
+        val diagonalTiles = WebMercatorUtils.computeVisibleTiles(
+            centerLat = lat,
+            centerLon = lon,
+            zoom = 12.0f,
+            tileZoom = 12,
+            baseTilePx = 256f,
+            viewportWidth = 800f,
+            viewportHeight = 1400f,
+            rotationDegrees = 45f
+        )
+        assertTrue(diagonalTiles.size >= northTiles.size)
     }
 
     @Test

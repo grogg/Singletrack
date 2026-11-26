@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.content.Context
+import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import coil3.memory.MemoryCache
@@ -20,13 +21,20 @@ class TopoTileLoader(context: Context) {
     private val imageLoader = SingletrackImageLoader.get(appContext)
 
     fun getCachedTile(z: Int, x: Int, y: Int): ImageBitmap? {
-        val entry = imageLoader.memoryCache?.get(MemoryCache.Key(tileKey(z, x, y))) ?: return null
-        return runCatching { entry.image.toBitmap().asImageBitmap() }.getOrNull()
+        val key = tileKey(z, x, y)
+        sharedBitmapCache.get(key)?.let { return it }
+        val entry = imageLoader.memoryCache?.get(MemoryCache.Key(key)) ?: return null
+        val bitmap = runCatching { entry.image.toBitmap().asImageBitmap() }.getOrNull() ?: return null
+        sharedBitmapCache.put(key, bitmap)
+        return bitmap
     }
 
     fun shouldFetch(z: Int, x: Int, y: Int): Boolean {
         val key = tileKey(z, x, y)
-        if (imageLoader.memoryCache?.get(MemoryCache.Key(key)) != null || sharedInFlight.contains(key)) {
+        if (sharedBitmapCache.get(key) != null ||
+            imageLoader.memoryCache?.get(MemoryCache.Key(key)) != null ||
+            sharedInFlight.contains(key)
+        ) {
             return false
         }
         val failedAt = sharedFailedTiles[key]
@@ -72,6 +80,7 @@ class TopoTileLoader(context: Context) {
                     val bitmap = runCatching { result.image.toBitmap().asImageBitmap() }.getOrNull()
                     if (bitmap != null) {
                         sharedFailedTiles.remove(key)
+                        sharedBitmapCache.put(key, bitmap)
                         return@withContext bitmap
                     }
                 }
@@ -90,6 +99,7 @@ class TopoTileLoader(context: Context) {
         private const val TILE_SIZE_PX = 256
         private const val FAILED_TILE_COOLDOWN_MS = 60_000L
         private val SUBDOMAINS = arrayOf("a", "b", "c")
+        private val sharedBitmapCache = object : LruCache<String, ImageBitmap>(48) {}
         private val sharedInFlight: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
         private val sharedFailedTiles = ConcurrentHashMap<String, Long>()
     }

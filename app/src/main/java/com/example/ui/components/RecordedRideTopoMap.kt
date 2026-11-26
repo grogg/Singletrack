@@ -36,12 +36,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -91,6 +93,7 @@ fun RecordedRideTopoMap(
     var centerLat by remember(ride.id, initialBounds) { mutableDoubleStateOf(initialBounds.centerLat) }
     var centerLon by remember(ride.id, initialBounds) { mutableDoubleStateOf(initialBounds.centerLon) }
     var zoom by remember(ride.id, initialBounds) { mutableFloatStateOf(initialBounds.zoom) }
+    var rotationDegrees by remember(ride.id, initialBounds) { mutableFloatStateOf(0f) }
 
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
 
@@ -108,6 +111,7 @@ fun RecordedRideTopoMap(
         canvasSize = canvasSize,
         baseTilePx = baseTilePx,
         tileLoader = tileLoader,
+        rotationDegrees = rotationDegrees,
         enabled = routePoints.isNotEmpty()
     )
 
@@ -153,11 +157,12 @@ fun RecordedRideTopoMap(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .clipToBounds()
                 .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
-                    detectTransformGestures { centroid, pan, gestureZoom, _ ->
+                    detectTransformGestures { centroid, pan, gestureZoom, gestureRotation ->
                         val updated = WebMercatorUtils.applyPinchPanZoom(
-                            current = MapCameraState(centerLat, centerLon, zoom),
+                            current = MapCameraState(centerLat, centerLon, zoom, rotationDegrees),
                             viewportWidth = size.width.toFloat(),
                             viewportHeight = size.height.toFloat(),
                             centroidX = centroid.x,
@@ -165,81 +170,90 @@ fun RecordedRideTopoMap(
                             panX = pan.x,
                             panY = pan.y,
                             gestureZoom = gestureZoom,
-                            baseTilePx = baseTilePx
+                            baseTilePx = baseTilePx,
+                            gestureRotation = gestureRotation
                         )
                         centerLat = updated.centerLat
                         centerLon = updated.centerLon
                         zoom = updated.zoom
+                        rotationDegrees = updated.rotationDegrees
                     }
                 }
         ) {
-            drawTopoTileBackdrop(
-                overlayState = tileOverlayState,
-                centerLat = centerLat,
-                centerLon = centerLon,
-                zoom = zoom,
-                baseTilePx = baseTilePx,
-                contourColor = contourColor,
-                isDark = isDark
-            )
+            drawFallbackTopoGrid(contourColor)
 
             val w = size.width
             val h = size.height
-
             val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
             val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
-            fun toScreen(pt: GeoPoint): Offset {
+            fun toUnrotatedMap(pt: GeoPoint): Offset {
                 val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
                 val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
                 return Offset(px, py)
             }
 
-            // 2. Recorded GPS route trace
-            if (routePoints.size >= 2) {
-                reusableRoutePath.reset()
-                val first = toScreen(routePoints.first())
-                reusableRoutePath.moveTo(first.x, first.y)
-                for (i in 1 until routePoints.size) {
-                    val pt = toScreen(routePoints[i])
-                    reusableRoutePath.lineTo(pt.x, pt.y)
+            rotate(degrees = rotationDegrees, pivot = Offset(w / 2f, h / 2f)) {
+                drawTopoTileBackdrop(
+                    overlayState = tileOverlayState,
+                    centerLat = centerLat,
+                    centerLon = centerLon,
+                    zoom = zoom,
+                    baseTilePx = baseTilePx
+                )
+
+                // 2. Recorded GPS route trace
+                if (routePoints.size >= 2) {
+                    reusableRoutePath.reset()
+                    val first = toUnrotatedMap(routePoints.first())
+                    reusableRoutePath.moveTo(first.x, first.y)
+                    for (i in 1 until routePoints.size) {
+                        val pt = toUnrotatedMap(routePoints[i])
+                        reusableRoutePath.lineTo(pt.x, pt.y)
+                    }
+
+                    // Glow halo
+                    drawPath(
+                        path = reusableRoutePath,
+                        color = routeAccent.copy(alpha = 0.28f),
+                        style = haloStroke
+                    )
+                    // Crisp white casing
+                    drawPath(
+                        path = reusableRoutePath,
+                        color = Color.White.copy(alpha = 0.96f),
+                        style = casingStroke
+                    )
+                    // Primary track stroke
+                    drawPath(
+                        path = reusableRoutePath,
+                        color = routeAccent,
+                        style = coreStroke
+                    )
                 }
 
-                // Glow halo
-                drawPath(
-                    path = reusableRoutePath,
-                    color = routeAccent.copy(alpha = 0.28f),
-                    style = haloStroke
-                )
-                // Crisp white casing
-                drawPath(
-                    path = reusableRoutePath,
-                    color = Color.White.copy(alpha = 0.96f),
-                    style = casingStroke
-                )
-                // Primary track stroke
-                drawPath(
-                    path = reusableRoutePath,
-                    color = routeAccent,
-                    style = coreStroke
-                )
+                // 3. Start and Finish markers
+                val startPt = toUnrotatedMap(routePoints.first())
+                val endPt = toUnrotatedMap(routePoints.last())
+
+                drawCircle(color = Color.White, radius = 12f, center = startPt)
+                drawCircle(color = DifficultyEasyColor, radius = 8f, center = startPt)
+
+                if (routePoints.size >= 2) {
+                    drawCircle(color = Color.White, radius = 12f, center = endPt)
+                    drawCircle(color = routeAccent, radius = 8f, center = endPt)
+                }
             }
 
-            // 3. Start and Finish markers
-            val startPt = toScreen(routePoints.first())
-            val endPt = toScreen(routePoints.last())
-
-            drawCircle(color = Color.White, radius = 12f, center = startPt)
-            drawCircle(color = DifficultyEasyColor, radius = 8f, center = startPt)
-
-            if (routePoints.size >= 2) {
-                drawCircle(color = Color.White, radius = 12f, center = endPt)
-                drawCircle(color = routeAccent, radius = 8f, center = endPt)
+            if (isDark) {
+                drawRect(color = Color.Black.copy(alpha = 0.20f))
             }
 
             if (isFullScreen || zoom >= 12.5f) {
-                drawMapLabelBadge(measured = startBadgeLayout, anchor = startPt)
+                val startScreen = mapToScreenOffset(toUnrotatedMap(routePoints.first()), rotationDegrees)
+                drawMapLabelBadge(measured = startBadgeLayout, anchor = startScreen)
                 if (routePoints.size >= 2) {
-                    drawMapLabelBadge(measured = finishBadgeLayout, anchor = endPt)
+                    val endScreen = mapToScreenOffset(toUnrotatedMap(routePoints.last()), rotationDegrees)
+                    drawMapLabelBadge(measured = finishBadgeLayout, anchor = endScreen)
                 }
             }
         }
@@ -286,74 +300,83 @@ fun RecordedRideTopoMap(
                 )
             }
 
-            Column(
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top
             ) {
-                if (onToggleFullScreen != null) {
+                MapCompassButton(
+                    rotationDegrees = rotationDegrees,
+                    onResetNorth = { rotationDegrees = 0f },
+                    testTag = "ride_map_compass_button"
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (onToggleFullScreen != null) {
+                        FilledIconButton(
+                            onClick = onToggleFullScreen,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag(
+                                    if (isFullScreen) "exit_fullscreen_ride_map" else "ride_map_expand_button"
+                                )
+                        ) {
+                            Icon(
+                                imageVector = if (isFullScreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                                contentDescription = if (isFullScreen) {
+                                    "Exit full screen ride map"
+                                } else {
+                                    "Expand ride route to full screen"
+                                }
+                            )
+                        }
+                    }
                     FilledIconButton(
-                        onClick = onToggleFullScreen,
+                        onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier
                             .size(48.dp)
-                            .testTag(
-                                if (isFullScreen) "exit_fullscreen_ride_map" else "ride_map_expand_button"
-                            )
+                            .testTag("ride_map_zoom_in_button")
                     ) {
-                        Icon(
-                            imageVector = if (isFullScreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
-                            contentDescription = if (isFullScreen) {
-                                "Exit full screen ride map"
-                            } else {
-                                "Expand ride route to full screen"
-                            }
-                        )
+                        Icon(Icons.Filled.Add, contentDescription = "Zoom in ride map")
                     }
-                }
-                FilledIconButton(
-                    onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("ride_map_zoom_in_button")
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = "Zoom in ride map")
-                }
-                FilledIconButton(
-                    onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("ride_map_zoom_out_button")
-                ) {
-                    Icon(Icons.Filled.Remove, contentDescription = "Zoom out ride map")
-                }
-                FilledIconButton(
-                    onClick = {
-                        centerLat = initialBounds.centerLat
-                        centerLon = initialBounds.centerLon
-                        zoom = initialBounds.zoom
-                    },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("ride_map_recenter_button")
-                ) {
-                    Icon(Icons.Filled.MyLocation, contentDescription = "Recenter ride route")
+                    FilledIconButton(
+                        onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("ride_map_zoom_out_button")
+                    ) {
+                        Icon(Icons.Filled.Remove, contentDescription = "Zoom out ride map")
+                    }
+                    FilledIconButton(
+                        onClick = {
+                            centerLat = initialBounds.centerLat
+                            centerLon = initialBounds.centerLon
+                            zoom = initialBounds.zoom
+                            rotationDegrees = 0f
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("ride_map_recenter_button")
+                    ) {
+                        Icon(Icons.Filled.MyLocation, contentDescription = "Recenter ride route")
+                    }
                 }
             }
         }

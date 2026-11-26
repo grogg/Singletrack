@@ -2,12 +2,14 @@ package com.example.data.repository
 
 import com.example.domain.model.GeoPoint
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.math.sinh
 import kotlin.math.tan
 
@@ -16,13 +18,66 @@ data class MapTileSpec(val z: Int, val x: Int, val y: Int)
 data class MapCameraState(
     val centerLat: Double,
     val centerLon: Double,
-    val zoom: Float
+    val zoom: Float,
+    val rotationDegrees: Float = 0f
 )
+
+data class ProjectedPoint(val x: Float, val y: Float)
 
 object WebMercatorUtils {
     private const val MAX_LAT = 85.05112878
     private const val MIN_ZOOM = 8.5f
     private const val MAX_ZOOM = 17.5f
+
+    fun normalizeRotationDegrees(degrees: Float): Float {
+        if (!degrees.isFinite()) return 0f
+        var normalized = degrees % 360f
+        if (normalized <= -180f) normalized += 360f
+        if (normalized > 180f) normalized -= 360f
+        return if (normalized == -0f) 0f else normalized
+    }
+
+    fun mapOffsetToScreen(
+        unrotatedX: Float,
+        unrotatedY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        rotationDegrees: Float
+    ): ProjectedPoint {
+        if (rotationDegrees == 0f) return ProjectedPoint(unrotatedX, unrotatedY)
+        val cx = viewportWidth / 2f
+        val cy = viewportHeight / 2f
+        val dx = (unrotatedX - cx).toDouble()
+        val dy = (unrotatedY - cy).toDouble()
+        val rad = Math.toRadians(rotationDegrees.toDouble())
+        val cosR = cos(rad)
+        val sinR = sin(rad)
+        return ProjectedPoint(
+            x = cx + (dx * cosR - dy * sinR).toFloat(),
+            y = cy + (dx * sinR + dy * cosR).toFloat()
+        )
+    }
+
+    fun screenToUnrotatedMapOffset(
+        screenX: Float,
+        screenY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+        rotationDegrees: Float
+    ): ProjectedPoint {
+        if (rotationDegrees == 0f) return ProjectedPoint(screenX, screenY)
+        val cx = viewportWidth / 2f
+        val cy = viewportHeight / 2f
+        val dx = (screenX - cx).toDouble()
+        val dy = (screenY - cy).toDouble()
+        val rad = Math.toRadians(rotationDegrees.toDouble())
+        val cosR = cos(rad)
+        val sinR = sin(rad)
+        return ProjectedPoint(
+            x = cx + (dx * cosR + dy * sinR).toFloat(),
+            y = cy + (-dx * sinR + dy * cosR).toFloat()
+        )
+    }
 
     fun lonToTileX(lon: Double, zoom: Double): Double {
         return (lon + 180.0) / 360.0 * 2.0.pow(zoom)
@@ -53,32 +108,48 @@ object WebMercatorUtils {
         panX: Float,
         panY: Float,
         gestureZoom: Float,
-        baseTilePx: Float
+        baseTilePx: Float,
+        gestureRotation: Float = 0f
     ): MapCameraState {
         val zoomDelta = (ln(gestureZoom.toDouble().coerceAtLeast(0.1)) / ln(2.0)).toFloat()
         val newZoom = (current.zoom + zoomDelta).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        val newRotation = normalizeRotationDegrees(current.rotationDegrees + gestureRotation)
 
-        val dxFromCenter = centroidX - viewportWidth / 2f
-        val dyFromCenter = centroidY - viewportHeight / 2f
+        val oldRad = Math.toRadians(current.rotationDegrees.toDouble())
+        val oldCos = cos(oldRad)
+        val oldSin = sin(oldRad)
+        val prevRelX = (centroidX - panX - viewportWidth / 2f).toDouble()
+        val prevRelY = (centroidY - panY - viewportHeight / 2f).toDouble()
+        val oldUx = prevRelX * oldCos + prevRelY * oldSin
+        val oldUy = -prevRelX * oldSin + prevRelY * oldCos
 
         val oldZoom = current.zoom.toDouble()
         val oldCenterX = lonToTileX(current.centerLon, oldZoom)
         val oldCenterY = latToTileY(current.centerLat, oldZoom)
 
-        val focalLon = tileXToLon(oldCenterX + (dxFromCenter / baseTilePx), oldZoom)
-        val focalLat = tileYToLat(oldCenterY + (dyFromCenter / baseTilePx), oldZoom)
+        val focalLon = tileXToLon(oldCenterX + (oldUx / baseTilePx), oldZoom)
+        val focalLat = tileYToLat(oldCenterY + (oldUy / baseTilePx), oldZoom)
+
+        val newRad = Math.toRadians(newRotation.toDouble())
+        val newCos = cos(newRad)
+        val newSin = sin(newRad)
+        val currRelX = (centroidX - viewportWidth / 2f).toDouble()
+        val currRelY = (centroidY - viewportHeight / 2f).toDouble()
+        val newUx = currRelX * newCos + currRelY * newSin
+        val newUy = -currRelX * newSin + currRelY * newCos
 
         val nextZoom = newZoom.toDouble()
         val focalTileXAtNew = lonToTileX(focalLon, nextZoom)
         val focalTileYAtNew = latToTileY(focalLat, nextZoom)
 
-        val nextCenterX = focalTileXAtNew - ((dxFromCenter + panX) / baseTilePx)
-        val nextCenterY = focalTileYAtNew - ((dyFromCenter + panY) / baseTilePx)
+        val nextCenterX = focalTileXAtNew - (newUx / baseTilePx)
+        val nextCenterY = focalTileYAtNew - (newUy / baseTilePx)
 
         return MapCameraState(
             centerLat = tileYToLat(nextCenterY, nextZoom),
             centerLon = tileXToLon(nextCenterX, nextZoom),
-            zoom = newZoom
+            zoom = newZoom,
+            rotationDegrees = newRotation
         )
     }
 
@@ -105,7 +176,8 @@ object WebMercatorUtils {
         tileZoom: Int,
         baseTilePx: Float,
         viewportWidth: Float,
-        viewportHeight: Float
+        viewportHeight: Float,
+        rotationDegrees: Float = 0f
     ): List<MapTileSpec> {
         val nInt = 1 shl tileZoom
         val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
@@ -114,8 +186,14 @@ object WebMercatorUtils {
         val cTileX = lonToTileX(centerLon, tileZoom.toDouble())
         val cTileY = latToTileY(centerLat, tileZoom.toDouble())
 
-        val halfTilesW = (viewportWidth / 2f) / renderedTilePx + 1.0
-        val halfTilesH = (viewportHeight / 2f) / renderedTilePx + 1.0
+        val rad = Math.toRadians(rotationDegrees.toDouble())
+        val absCos = abs(cos(rad))
+        val absSin = abs(sin(rad))
+        val halfViewW = (viewportWidth / 2.0) * absCos + (viewportHeight / 2.0) * absSin
+        val halfViewH = (viewportWidth / 2.0) * absSin + (viewportHeight / 2.0) * absCos
+
+        val halfTilesW = halfViewW / renderedTilePx + 1.0
+        val halfTilesH = halfViewH / renderedTilePx + 1.0
 
         val minX = floor(cTileX - halfTilesW).toInt()
         val maxX = ceil(cTileX + halfTilesW).toInt()

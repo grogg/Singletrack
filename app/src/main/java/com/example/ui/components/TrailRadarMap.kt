@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -112,6 +114,7 @@ fun TrailRadarMap(
     var centerLat by remember(origin, initialSelectedTrail?.osmKey) { mutableDoubleStateOf(startLat) }
     var centerLon by remember(origin, initialSelectedTrail?.osmKey) { mutableDoubleStateOf(startLon) }
     var zoom by remember(origin, initialSelectedTrail?.osmKey) { mutableFloatStateOf(startZoom) }
+    var rotationDegrees by remember(origin, initialSelectedTrail?.osmKey) { mutableFloatStateOf(0f) }
     var selectedPin by remember(trails, initialSelectedTrail?.osmKey) {
         mutableStateOf(initialSelectedTrail ?: trails.firstOrNull())
     }
@@ -146,7 +149,8 @@ fun TrailRadarMap(
         zoom = zoom,
         canvasSize = canvasSize,
         baseTilePx = baseTilePx,
-        tileLoader = tileLoader
+        tileLoader = tileLoader,
+        rotationDegrees = rotationDegrees
     )
 
     val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f) }
@@ -181,11 +185,12 @@ fun TrailRadarMap(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .clipToBounds()
                 .onSizeChanged { canvasSize = it }
                 .pointerInput(Unit) {
-                    detectTransformGestures { centroid, pan, gestureZoom, _ ->
+                    detectTransformGestures { centroid, pan, gestureZoom, gestureRotation ->
                         val updated = WebMercatorUtils.applyPinchPanZoom(
-                            current = MapCameraState(centerLat, centerLon, zoom),
+                            current = MapCameraState(centerLat, centerLon, zoom, rotationDegrees),
                             viewportWidth = size.width.toFloat(),
                             viewportHeight = size.height.toFloat(),
                             centroidX = centroid.x,
@@ -193,17 +198,27 @@ fun TrailRadarMap(
                             panX = pan.x,
                             panY = pan.y,
                             gestureZoom = gestureZoom,
-                            baseTilePx = baseTilePx
+                            baseTilePx = baseTilePx,
+                            gestureRotation = gestureRotation
                         )
                         centerLat = updated.centerLat
                         centerLon = updated.centerLon
                         zoom = updated.zoom
+                        rotationDegrees = updated.rotationDegrees
                     }
                 }
                 .pointerInput(Unit) {
                     detectTapGestures { tapOffset ->
                         val w = size.width.toFloat()
                         val h = size.height.toFloat()
+                        val mappedTap = WebMercatorUtils.screenToUnrotatedMapOffset(
+                            screenX = tapOffset.x,
+                            screenY = tapOffset.y,
+                            viewportWidth = w,
+                            viewportHeight = h,
+                            rotationDegrees = rotationDegrees
+                        )
+                        val unrotatedTap = Offset(mappedTap.x, mappedTap.y)
                         val currentZoom = zoom.toDouble()
                         val cTileX = WebMercatorUtils.lonToTileX(centerLon, currentZoom)
                         val cTileY = WebMercatorUtils.latToTileY(centerLat, currentZoom)
@@ -219,7 +234,7 @@ fun TrailRadarMap(
 
                         for (trail in latestTrails) {
                             val pinPos = toScreen(GeoPoint(trail.centerLat, trail.centerLon))
-                            val pinDist = hypot(tapOffset.x - pinPos.x, tapOffset.y - pinPos.y)
+                            val pinDist = hypot(unrotatedTap.x - pinPos.x, unrotatedTap.y - pinPos.y)
                             if (pinDist < bestDist) {
                                 bestDist = pinDist
                                 bestTrail = trail
@@ -237,7 +252,7 @@ fun TrailRadarMap(
                                 for (i in 0 until seg.lastIndex) {
                                     val a = toScreen(seg[i])
                                     val b = toScreen(seg[i + 1])
-                                    val segDist = pointToSegmentDistance(tapOffset, a, b)
+                                    val segDist = pointToSegmentDistance(unrotatedTap, a, b)
                                     if (segDist < bestDist) {
                                         bestDist = segDist
                                         bestTrail = trail
@@ -252,73 +267,87 @@ fun TrailRadarMap(
                     }
                 }
         ) {
-            drawTopoTileBackdrop(
-                overlayState = tileOverlayState,
-                centerLat = centerLat,
-                centerLon = centerLon,
-                zoom = zoom,
-                baseTilePx = baseTilePx,
-                contourColor = contourColor,
-                isDark = isDark
-            )
+            drawFallbackTopoGrid(contourColor)
 
             val w = size.width
             val h = size.height
-
             val cTileX = WebMercatorUtils.lonToTileX(centerLon, zoom.toDouble())
             val cTileY = WebMercatorUtils.latToTileY(centerLat, zoom.toDouble())
-            fun toScreen(pt: GeoPoint): Offset {
+            fun toUnrotatedMap(pt: GeoPoint): Offset {
                 val px = w / 2f + ((WebMercatorUtils.lonToTileX(pt.lon, zoom.toDouble()) - cTileX) * baseTilePx).toFloat()
                 val py = h / 2f + ((WebMercatorUtils.latToTileY(pt.lat, zoom.toDouble()) - cTileY) * baseTilePx).toFloat()
                 return Offset(px, py)
             }
 
-            // 2. Geodesic 10-mile and 20-mile boundary circles
-            drawGeodesicRing(
-                points = innerRing10Mi,
-                toScreen = ::toScreen,
-                reusablePath = reusablePath,
-                color = PineDeep.copy(alpha = 0.55f),
-                stroke = ring10Stroke
-            )
-            drawGeodesicRing(
-                points = outerRing20Mi,
-                toScreen = ::toScreen,
-                reusablePath = reusablePath,
-                color = Terracotta.copy(alpha = 0.90f),
-                stroke = ring20Stroke
-            )
-
-            // 3. Draw unselected trail routes first, then selected trail route on top
-            for (trail in unselectedTrails) {
-                drawTrailOverlay(
-                    trail = trail,
-                    color = routeColor(trail.difficulty),
-                    isSelected = false,
-                    reusablePath = reusablePath,
-                    haloStroke = selectedHaloStroke,
-                    casingStroke = unselectedCasingStroke,
-                    coreStroke = unselectedCoreStroke,
-                    toScreen = ::toScreen
+            rotate(degrees = rotationDegrees, pivot = Offset(w / 2f, h / 2f)) {
+                drawTopoTileBackdrop(
+                    overlayState = tileOverlayState,
+                    centerLat = centerLat,
+                    centerLon = centerLon,
+                    zoom = zoom,
+                    baseTilePx = baseTilePx
                 )
-            }
-            selectedPin?.let { selected ->
-                drawTrailOverlay(
-                    trail = selected,
-                    color = routeColor(selected.difficulty),
-                    isSelected = true,
+
+                // 2. Geodesic 10-mile and 20-mile boundary circles
+                drawGeodesicRing(
+                    points = innerRing10Mi,
+                    toScreen = ::toUnrotatedMap,
                     reusablePath = reusablePath,
-                    haloStroke = selectedHaloStroke,
-                    casingStroke = selectedCasingStroke,
-                    coreStroke = selectedCoreStroke,
-                    toScreen = ::toScreen
+                    color = PineDeep.copy(alpha = 0.55f),
+                    stroke = ring10Stroke
                 )
+                drawGeodesicRing(
+                    points = outerRing20Mi,
+                    toScreen = ::toUnrotatedMap,
+                    reusablePath = reusablePath,
+                    color = Terracotta.copy(alpha = 0.90f),
+                    stroke = ring20Stroke
+                )
+
+                // 3. Draw unselected trail routes first, then selected trail route on top
+                for (trail in unselectedTrails) {
+                    drawTrailOverlay(
+                        trail = trail,
+                        color = routeColor(trail.difficulty),
+                        isSelected = false,
+                        reusablePath = reusablePath,
+                        haloStroke = selectedHaloStroke,
+                        casingStroke = unselectedCasingStroke,
+                        coreStroke = unselectedCoreStroke,
+                        toScreen = ::toUnrotatedMap
+                    )
+                }
+                selectedPin?.let { selected ->
+                    drawTrailOverlay(
+                        trail = selected,
+                        color = routeColor(selected.difficulty),
+                        isSelected = true,
+                        reusablePath = reusablePath,
+                        haloStroke = selectedHaloStroke,
+                        casingStroke = selectedCasingStroke,
+                        coreStroke = selectedCoreStroke,
+                        toScreen = ::toUnrotatedMap
+                    )
+                }
+
+                // 5. User origin GPS marker
+                val originOffset = toUnrotatedMap(GeoPoint(origin.lat, origin.lon))
+                drawCircle(color = Terracotta.copy(alpha = 0.24f), radius = 24f, center = originOffset)
+                drawCircle(color = Color.White, radius = 12f, center = originOffset)
+                drawCircle(color = Terracotta, radius = 8f, center = originOffset)
             }
 
-            // 4. Draw trail name labels when zoomed in or in full-screen for selected trail
+            if (isDark) {
+                drawRect(color = Color.Black.copy(alpha = 0.20f))
+            }
+
+            // 4. Draw upright trail name labels when zoomed in or in full-screen
             if (isFullScreen || zoom >= 12.0f) {
                 fun drawTrailLabel(trail: Trail, badgeAlpha: Float) {
-                    val pos = toScreen(GeoPoint(trail.centerLat, trail.centerLon))
+                    val pos = mapToScreenOffset(
+                        unrotated = toUnrotatedMap(GeoPoint(trail.centerLat, trail.centerLon)),
+                        rotationDegrees = rotationDegrees
+                    )
                     val labelText = trail.name.take(26)
                     val measured = labelLayoutCache.getOrPut(labelText) {
                         textMeasurer.measure(
@@ -342,12 +371,6 @@ fun TrailRadarMap(
                     }
                 }
             }
-
-            // 5. User origin GPS marker
-            val originOffset = toScreen(GeoPoint(origin.lat, origin.lon))
-            drawCircle(color = Terracotta.copy(alpha = 0.24f), radius = 24f, center = originOffset)
-            drawCircle(color = Color.White, radius = 12f, center = originOffset)
-            drawCircle(color = Terracotta, radius = 8f, center = originOffset)
         }
 
         // Floating Top & Bottom HUD respecting safeDrawing insets when full-screen
@@ -391,77 +414,86 @@ fun TrailRadarMap(
                 )
             }
 
-            // Top-right Fullscreen, Zoom In, Zoom Out, Recenter controls
-            Column(
+            // Top-right Compass, Fullscreen, Zoom In, Zoom Out, Recenter controls
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Top
             ) {
-                if (onToggleFullScreen != null) {
+                MapCompassButton(
+                    rotationDegrees = rotationDegrees,
+                    onResetNorth = { rotationDegrees = 0f },
+                    testTag = "map_compass_button"
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (onToggleFullScreen != null) {
+                        FilledIconButton(
+                            onClick = onToggleFullScreen,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag(if (isFullScreen) "exit_fullscreen_map_button" else "expand_fullscreen_map_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isFullScreen) {
+                                    Icons.Filled.FullscreenExit
+                                } else {
+                                    Icons.Filled.Fullscreen
+                                },
+                                contentDescription = if (isFullScreen) {
+                                    "Exit full screen map"
+                                } else {
+                                    "Expand map to full screen"
+                                }
+                            )
+                        }
+                    }
                     FilledIconButton(
-                        onClick = onToggleFullScreen,
+                        onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier
                             .size(48.dp)
-                            .testTag(if (isFullScreen) "exit_fullscreen_map_button" else "expand_fullscreen_map_button")
+                            .testTag("map_zoom_in_button")
                     ) {
-                        Icon(
-                            imageVector = if (isFullScreen) {
-                                Icons.Filled.FullscreenExit
-                            } else {
-                                Icons.Filled.Fullscreen
-                            },
-                            contentDescription = if (isFullScreen) {
-                                "Exit full screen map"
-                            } else {
-                                "Expand map to full screen"
-                            }
-                        )
+                        Icon(Icons.Filled.Add, contentDescription = "Zoom in map")
                     }
-                }
-                FilledIconButton(
-                    onClick = { zoom = (zoom + 0.8f).coerceAtMost(17.5f) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("map_zoom_in_button")
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = "Zoom in map")
-                }
-                FilledIconButton(
-                    onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("map_zoom_out_button")
-                ) {
-                    Icon(Icons.Filled.Remove, contentDescription = "Zoom out map")
-                }
-                FilledIconButton(
-                    onClick = {
-                        centerLat = startLat
-                        centerLon = startLon
-                        zoom = startZoom
-                    },
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("map_recenter_button")
-                ) {
-                    Icon(Icons.Filled.MyLocation, contentDescription = "Recenter map")
+                    FilledIconButton(
+                        onClick = { zoom = (zoom - 0.8f).coerceAtLeast(8.5f) },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("map_zoom_out_button")
+                    ) {
+                        Icon(Icons.Filled.Remove, contentDescription = "Zoom out map")
+                    }
+                    FilledIconButton(
+                        onClick = {
+                            centerLat = startLat
+                            centerLon = startLon
+                            zoom = startZoom
+                            rotationDegrees = 0f
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("map_recenter_button")
+                    ) {
+                        Icon(Icons.Filled.MyLocation, contentDescription = "Recenter map")
+                    }
                 }
             }
 

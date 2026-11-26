@@ -1,5 +1,10 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -7,20 +12,31 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import com.example.data.remote.TopoTileLoader
 import com.example.data.repository.MapTileSpec
 import com.example.data.repository.WebMercatorUtils
+import com.example.ui.theme.Terracotta
+import com.example.ui.theme.TerracottaBright
 import com.example.ui.theme.TopoMapBadgeScrim
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -40,13 +56,23 @@ fun rememberTopoTileOverlayState(
     canvasSize: IntSize,
     baseTilePx: Float,
     tileLoader: TopoTileLoader,
+    rotationDegrees: Float = 0f,
     enabled: Boolean = true
 ): TopoTileOverlayState {
     val coroutineScope = rememberCoroutineScope()
     var tileTick by remember { mutableIntStateOf(0) }
     val tileZoom = zoom.roundToInt().coerceIn(8, 17)
 
-    val visibleTiles = remember(centerLat, centerLon, zoom, tileZoom, canvasSize, baseTilePx, enabled) {
+    val visibleTiles = remember(
+        centerLat,
+        centerLon,
+        zoom,
+        tileZoom,
+        canvasSize,
+        baseTilePx,
+        rotationDegrees,
+        enabled
+    ) {
         if (!enabled || canvasSize.width == 0 || canvasSize.height == 0) {
             emptyList()
         } else {
@@ -57,7 +83,8 @@ fun rememberTopoTileOverlayState(
                 tileZoom = tileZoom,
                 baseTilePx = baseTilePx,
                 viewportWidth = canvasSize.width.toFloat(),
-                viewportHeight = canvasSize.height.toFloat()
+                viewportHeight = canvasSize.height.toFloat(),
+                rotationDegrees = rotationDegrees
             )
         }
     }
@@ -85,20 +112,9 @@ fun rememberTopoTileOverlayState(
     }
 }
 
-fun DrawScope.drawTopoTileBackdrop(
-    overlayState: TopoTileOverlayState,
-    centerLat: Double,
-    centerLon: Double,
-    zoom: Float,
-    baseTilePx: Float,
-    contourColor: Color,
-    isDark: Boolean
-) {
-    if (overlayState.tileTick < 0) return
-
+fun DrawScope.drawFallbackTopoGrid(contourColor: Color) {
     val w = size.width
     val h = size.height
-
     val gridStep = 64f
     var gx = 0f
     while (gx < w) {
@@ -110,7 +126,19 @@ fun DrawScope.drawTopoTileBackdrop(
         drawLine(contourColor, Offset(0f, gy), Offset(w, gy), strokeWidth = 1f)
         gy += gridStep
     }
+}
 
+fun DrawScope.drawTopoTileBackdrop(
+    overlayState: TopoTileOverlayState,
+    centerLat: Double,
+    centerLon: Double,
+    zoom: Float,
+    baseTilePx: Float
+) {
+    if (overlayState.tileTick < 0) return
+
+    val w = size.width
+    val h = size.height
     val tileZoom = overlayState.tileZoom
     val scaleFactor = 2.0.pow((zoom - tileZoom).toDouble()).toFloat()
     val renderedTilePx = baseTilePx * scaleFactor
@@ -134,10 +162,18 @@ fun DrawScope.drawTopoTileBackdrop(
             dstSize = IntSize(tileDim, tileDim)
         )
     }
+}
 
-    if (isDark) {
-        drawRect(color = Color.Black.copy(alpha = 0.20f))
-    }
+fun DrawScope.mapToScreenOffset(unrotated: Offset, rotationDegrees: Float): Offset {
+    if (rotationDegrees == 0f) return unrotated
+    val projected = WebMercatorUtils.mapOffsetToScreen(
+        unrotatedX = unrotated.x,
+        unrotatedY = unrotated.y,
+        viewportWidth = size.width,
+        viewportHeight = size.height,
+        rotationDegrees = rotationDegrees
+    )
+    return Offset(projected.x, projected.y)
 }
 
 fun DrawScope.drawMapLabelBadge(
@@ -170,4 +206,84 @@ fun DrawScope.drawMapLabelBadge(
         color = Color.White,
         topLeft = tl
     )
+}
+
+@Composable
+fun MapCompassButton(
+    rotationDegrees: Float,
+    onResetNorth: () -> Unit,
+    testTag: String,
+    modifier: Modifier = Modifier
+) {
+    val normalized = WebMercatorUtils.normalizeRotationDegrees(rotationDegrees)
+    val isRotated = abs(normalized) > 0.5f
+    val southTipColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    val bezelColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+    val northTipColor = if (isRotated) TerracottaBright else Terracotta
+    val needlePath = remember { Path() }
+    val bezelStroke = remember { Stroke(width = 2.2f) }
+    val a11yDescription = if (isRotated) {
+        "Compass rotated ${abs(normalized).roundToInt()} degrees. Tap to reset north up"
+    } else {
+        "Compass: North up"
+    }
+
+    FilledIconButton(
+        onClick = onResetNorth,
+        colors = IconButtonDefaults.filledIconButtonColors(
+            containerColor = if (isRotated) {
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.96f)
+            } else {
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+            },
+            contentColor = if (isRotated) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        ),
+        modifier = modifier
+            .size(48.dp)
+            .semantics { contentDescription = a11yDescription }
+            .testTag(testTag)
+    ) {
+        Canvas(modifier = Modifier.size(26.dp)) {
+            val cx = size.width / 2f
+            val cy = size.height / 2f
+            val radius = size.minDimension * 0.44f
+            drawCircle(
+                color = bezelColor,
+                radius = radius,
+                center = Offset(cx, cy),
+                style = bezelStroke
+            )
+
+            rotate(degrees = normalized, pivot = Offset(cx, cy)) {
+                val tipOffset = radius * 0.84f
+                val wingOffset = radius * 0.28f
+
+                // North needle (red/terracotta)
+                needlePath.reset()
+                needlePath.moveTo(cx, cy - tipOffset)
+                needlePath.lineTo(cx - wingOffset, cy)
+                needlePath.lineTo(cx + wingOffset, cy)
+                needlePath.close()
+                drawPath(path = needlePath, color = northTipColor)
+
+                // South needle (muted)
+                needlePath.reset()
+                needlePath.moveTo(cx, cy + tipOffset)
+                needlePath.lineTo(cx - wingOffset, cy)
+                needlePath.lineTo(cx + wingOffset, cy)
+                needlePath.close()
+                drawPath(path = needlePath, color = southTipColor)
+
+                drawCircle(
+                    color = Color.White,
+                    radius = radius * 0.14f,
+                    center = Offset(cx, cy)
+                )
+            }
+        }
+    }
 }
