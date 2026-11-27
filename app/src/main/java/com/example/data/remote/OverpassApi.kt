@@ -23,10 +23,22 @@ interface OverpassService {
 
 object OverpassClient {
     val ENDPOINTS = listOf(
-        "https://overpass-api.de/api/interpreter",
         "https://overpass.private.coffee/api/interpreter",
-        "https://overpass.osm.ch/api/interpreter"
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.nchc.org.tw/api/interpreter"
     )
+
+    private const val DRESEL_NA_ENDPOINT = "https://ovp.dresel.systems/api-na/interpreter"
+    private const val DRESEL_EU_ENDPOINT = "https://ovp.dresel.systems/api/interpreter"
+
+    fun endpointsForLocation(lat: Double, lon: Double): List<String> = buildList {
+        addAll(ENDPOINTS)
+        if (lat in 15.0..70.0 && lon in -165.0..-55.0) {
+            add(DRESEL_NA_ENDPOINT)
+        } else if (lat in 35.0..70.0 && lon in -11.0..40.0) {
+            add(DRESEL_EU_ENDPOINT)
+        }
+    }
 
     private val moshi: Moshi by lazy {
         Moshi.Builder().build()
@@ -38,9 +50,11 @@ object OverpassClient {
 
     val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(45, TimeUnit.SECONDS)
-            .writeTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(5, TimeUnit.SECONDS)
+            .callTimeout(18, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("User-Agent", "SingletrackMTB/${BuildConfig.VERSION_NAME}")

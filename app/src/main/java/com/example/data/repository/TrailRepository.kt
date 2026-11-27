@@ -6,9 +6,12 @@ import com.example.data.local.OfflineRegionEntity
 import com.example.data.local.OfflineTrailDao
 import com.example.data.remote.ElevationClient
 import com.example.data.remote.NominatimClient
+import com.example.data.remote.NominatimPlaceDto
 import com.example.data.remote.OverpassClient
 import com.example.data.remote.OverpassElement
 import com.example.data.remote.OverpassResponse
+import com.example.data.remote.PhotonClient
+import com.example.data.remote.PhotonFeature
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.LocationPlace
 import com.example.domain.model.OfflineRegion
@@ -17,11 +20,21 @@ import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailElevationProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
 import java.util.Collections
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 data class TrailScanResult(
     val trails: List<Trail>,
@@ -33,6 +46,16 @@ data class TrailScanResult(
 class TrailRepository(
     private val offlineTrailDao: OfflineTrailDao
 ) {
+    private data class CachedScanEntry(
+        val result: TrailScanResult,
+        val timestampMillis: Long
+    )
+
+    private data class CachedPlaceEntry(
+        val places: List<LocationPlace>,
+        val timestampMillis: Long
+    )
+
     private val elevationMemoryCache: MutableMap<String, TrailElevationProfile> =
         Collections.synchronizedMap(
             object : LinkedHashMap<String, TrailElevationProfile>(64, 0.75f, true) {
@@ -41,6 +64,29 @@ class TrailRepository(
                 ): Boolean = size > MAX_ELEVATION_CACHE_ENTRIES
             }
         )
+
+    private val scanMemoryCache: MutableMap<String, CachedScanEntry> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, CachedScanEntry>(16, 0.75f, true) {
+                override fun removeEldestEntry(
+                    eldest: MutableMap.MutableEntry<String, CachedScanEntry>?
+                ): Boolean = size > MAX_SCAN_CACHE_ENTRIES
+            }
+        )
+
+    private val placeSearchCache: MutableMap<String, CachedPlaceEntry> =
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, CachedPlaceEntry>(32, 0.75f, true) {
+                override fun removeEldestEntry(
+                    eldest: MutableMap.MutableEntry<String, CachedPlaceEntry>?
+                ): Boolean = size > MAX_PLACE_CACHE_ENTRIES
+            }
+        )
+
+    private val endpointCooldownUntilMs = ConcurrentHashMap<String, Long>()
+
+    @Volatile
+    private var preferredEndpoint: String? = null
 
     fun observeOfflineRegions(): Flow<List<OfflineRegion>> {
         return offlineTrailDao.observeRegions().map { list ->
@@ -52,33 +98,52 @@ class TrailRepository(
         offlineTrailDao.getAllRegionsOnce().map { it.toDomain() }
     }
 
-    suspend fun fetchTrailsNear(lat: Double, lon: Double): Result<TrailScanResult> = withContext(Dispatchers.IO) {
+    suspend fun fetchTrailsNear(
+        lat: Double,
+        lon: Double,
+        forceRefresh: Boolean = false
+    ): Result<TrailScanResult> = withContext(Dispatchers.IO) {
+        val cacheKey = buildRegionId(lat, lon)
+        if (!forceRefresh) {
+            val cached = scanMemoryCache[cacheKey]
+            if (cached != null && (System.currentTimeMillis() - cached.timestampMillis) <= SCAN_CACHE_TTL_MS) {
+                return@withContext Result.success(cached.result)
+            }
+        }
+
         try {
-            // For a 20-mile radius, fetch geometry directly so trail routes overlay on the topo map
-            val primaryElements = queryWithGeomFallback(
-                geomQuery = buildPrimaryMtbQuery(lat, lon, includeGeometry = true),
-                lightQuery = buildPrimaryMtbQuery(lat, lon, includeGeometry = false)
-            )
+            // For a 20-mile radius, fetch geometry directly so trail routes overlay on the topo map,
+            // degrading cleanly to fast core MTB or lightweight queries in dense metro areas.
+            val (primaryElements, hasFullGeom) = fetchMtbElementsWithFallback(lat, lon)
             var trails = GeoUtils.parseAndGroupElements(primaryElements, lat, lon)
             var usedFallback = false
 
-            if (trails.isEmpty()) {
-                val fallbackElements = queryWithGeomFallback(
-                    geomQuery = buildSingletrackFallbackQuery(lat, lon, includeGeometry = true),
-                    lightQuery = buildSingletrackFallbackQuery(lat, lon, includeGeometry = false)
-                )
-                trails = GeoUtils.parseAndGroupElements(fallbackElements, lat, lon)
-                usedFallback = trails.isNotEmpty()
+            if (trails.size < MIN_PRIMARY_TRAIL_THRESHOLD) {
+                val fallbackElements = fetchSingletrackFallbackElements(lat, lon, preferGeometry = hasFullGeom)
+                val fallbackTrails = GeoUtils.parseAndGroupElements(fallbackElements, lat, lon)
+                if (fallbackTrails.isNotEmpty()) {
+                    val existingKeys = trails.mapTo(HashSet()) { it.osmKey }
+                    val newAdditions = fallbackTrails.filter { it.osmKey !in existingKeys }
+                    if (newAdditions.isNotEmpty()) {
+                        trails = (trails + newAdditions).sortedBy { it.distanceFromUserMiles }
+                        usedFallback = true
+                    }
+                }
             }
 
-            Result.success(
-                TrailScanResult(
-                    trails = trails,
-                    isFromOfflineCache = false,
-                    offlineRegionName = null,
-                    usedSingletrackFallback = usedFallback
-                )
+            val scanResult = TrailScanResult(
+                trails = trails,
+                isFromOfflineCache = false,
+                offlineRegionName = null,
+                usedSingletrackFallback = usedFallback
             )
+            if (trails.isNotEmpty()) {
+                scanMemoryCache[cacheKey] = CachedScanEntry(
+                    result = scanResult,
+                    timestampMillis = System.currentTimeMillis()
+                )
+            }
+            Result.success(scanResult)
         } catch (ce: CancellationException) {
             throw ce
         } catch (networkError: Exception) {
@@ -185,39 +250,50 @@ class TrailRepository(
         centerLon: Double
     ): Result<OfflineRegion> = withContext(Dispatchers.IO) {
         try {
-            var hasFullGeometry = true
-            var elements = try {
-                val fullQuery = buildPrimaryMtbQuery(centerLat, centerLon, includeGeometry = true)
-                executeOverpassWithFallback(fullQuery).elements
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (_: Exception) {
-                hasFullGeometry = false
-                val lightQuery = buildPrimaryMtbQuery(centerLat, centerLon, includeGeometry = false)
-                executeOverpassWithFallback(lightQuery).elements
-            }
-
-            if (elements.isEmpty()) {
-                val fallbackQuery = buildSingletrackFallbackQuery(centerLat, centerLon, includeGeometry = true)
-                elements = try {
-                    executeOverpassWithFallback(fallbackQuery).elements
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (_: Exception) {
-                    hasFullGeometry = false
-                    val lightFallback = buildSingletrackFallbackQuery(centerLat, centerLon, includeGeometry = false)
-                    executeOverpassWithFallback(lightFallback).elements
+            val regionId = buildRegionId(centerLat, centerLon)
+            val cachedScan = scanMemoryCache[regionId]
+                ?.takeIf { (System.currentTimeMillis() - it.timestampMillis) <= SCAN_CACHE_TTL_MS }
+                ?.result
+            val cachedWithGeometry = cachedScan?.trails?.takeIf { cachedTrails ->
+                cachedTrails.isNotEmpty() && cachedTrails.any { t ->
+                    t.geometry.size >= 2 || t.routeSegments.any { seg -> seg.size >= 2 }
                 }
             }
 
-            val trails = GeoUtils.parseAndGroupElements(
-                elements = elements,
-                originLat = centerLat,
-                originLon = centerLon,
-                isOfflineCached = true
-            )
+            val hasFullGeometry: Boolean
+            var trails: List<Trail>
+            if (cachedWithGeometry != null) {
+                hasFullGeometry = true
+                trails = cachedWithGeometry.map { it.copy(isOfflineCached = true) }
+            } else {
+                val (elements, fetchedFullGeom) = fetchMtbElementsWithFallback(centerLat, centerLon)
+                hasFullGeometry = fetchedFullGeom
+                trails = GeoUtils.parseAndGroupElements(
+                    elements = elements,
+                    originLat = centerLat,
+                    originLon = centerLon,
+                    isOfflineCached = true
+                )
 
-            val regionId = buildRegionId(centerLat, centerLon)
+                if (trails.size < MIN_PRIMARY_TRAIL_THRESHOLD) {
+                    val fallbackElements = fetchSingletrackFallbackElements(
+                        centerLat,
+                        centerLon,
+                        preferGeometry = hasFullGeometry
+                    )
+                    val fallbackTrails = GeoUtils.parseAndGroupElements(
+                        elements = fallbackElements,
+                        originLat = centerLat,
+                        originLon = centerLon,
+                        isOfflineCached = true
+                    )
+                    if (fallbackTrails.isNotEmpty()) {
+                        val existingKeys = trails.mapTo(HashSet()) { it.osmKey }
+                        trails = (trails + fallbackTrails.filter { it.osmKey !in existingKeys })
+                            .sortedBy { it.distanceFromUserMiles }
+                    }
+                }
+            }
             val entities = trails.map { trail ->
                 val segmentsToSave = if (trail.routeSegments.isNotEmpty()) {
                     trail.routeSegments
@@ -348,22 +424,83 @@ class TrailRepository(
     }
 
     suspend fun searchPlaces(query: String): Result<List<LocationPlace>> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) return@withContext Result.success(emptyList())
+
+        val offlineMatches = runCatching {
+            offlineTrailDao.getAllRegionsOnce()
+                .filter { it.name.contains(trimmed, ignoreCase = true) }
+                .map { LocationPlace(name = "${it.name} (Offline)", lat = it.centerLat, lon = it.centerLon) }
+        }.getOrElse { emptyList() }
+
+        parseCoordinateQuery(trimmed)?.let { coordPlace ->
+            val combined = deduplicatePlaces(listOf(coordPlace) + offlineMatches).take(MAX_PLACE_RESULTS)
+            return@withContext Result.success(combined)
+        }
+
+        val cacheKey = trimmed.lowercase(Locale.US)
+        val cached = placeSearchCache[cacheKey]
+        if (cached != null && (System.currentTimeMillis() - cached.timestampMillis) <= PLACE_CACHE_TTL_MS) {
+            val combined = deduplicatePlaces(offlineMatches + cached.places).take(MAX_PLACE_RESULTS)
+            return@withContext Result.success(combined)
+        }
+
         try {
-            val results = NominatimClient.service.searchPlaces(query = query.trim())
-            val mapped = results.mapNotNull { dto ->
-                val lat = dto.lat.toDoubleOrNull() ?: return@mapNotNull null
-                val lon = dto.lon.toDoubleOrNull() ?: return@mapNotNull null
-                val cleanName = dto.displayName
-                    .split(",")
-                    .take(2)
-                    .joinToString(", ") { it.trim() }
-                LocationPlace(name = cleanName, lat = lat, lon = lon, isCurrentGps = false)
+            val (photonResult, nominatimResult) = coroutineScope {
+                val photonDeferred = async {
+                    try {
+                        Result.success(
+                            PhotonClient.service.searchPlaces(query = trimmed).features.mapNotNull(::mapPhotonFeature)
+                        )
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                }
+                val nominatimDeferred = async {
+                    try {
+                        Result.success(
+                            NominatimClient.service.searchPlaces(query = trimmed).mapNotNull(::mapNominatimDto)
+                        )
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                }
+                photonDeferred.await() to nominatimDeferred.await()
             }
-            Result.success(mapped)
+
+            val photonPlaces = photonResult.getOrElse { emptyList() }
+            val nominatimPlaces = nominatimResult.getOrElse { emptyList() }
+            val remotePlaces = deduplicatePlaces(photonPlaces + nominatimPlaces)
+
+            if (photonResult.isFailure && nominatimResult.isFailure && offlineMatches.isEmpty()) {
+                return@withContext Result.failure(
+                    photonResult.exceptionOrNull()
+                        ?: nominatimResult.exceptionOrNull()
+                        ?: IllegalStateException("Location search failed")
+                )
+            }
+
+            if (remotePlaces.isNotEmpty()) {
+                placeSearchCache[cacheKey] = CachedPlaceEntry(
+                    places = remotePlaces,
+                    timestampMillis = System.currentTimeMillis()
+                )
+            }
+
+            val combined = deduplicatePlaces(offlineMatches + remotePlaces).take(MAX_PLACE_RESULTS)
+            Result.success(combined)
         } catch (ce: CancellationException) {
             throw ce
         } catch (e: Exception) {
-            Result.failure(e)
+            if (offlineMatches.isNotEmpty()) {
+                Result.success(offlineMatches.take(MAX_PLACE_RESULTS))
+            } else {
+                Result.failure(e)
+            }
         }
     }
 
@@ -371,24 +508,21 @@ class TrailRepository(
         return String.format(Locale.US, "region_%.2f_%.2f", lat, lon)
     }
 
-    private suspend fun queryWithGeomFallback(
-        geomQuery: String,
-        lightQuery: String
-    ): List<OverpassElement> {
-        return try {
-            executeOverpassWithFallback(geomQuery).elements
-        } catch (ce: CancellationException) {
-            throw ce
-        } catch (_: Exception) {
-            executeOverpassWithFallback(lightQuery).elements
-        }
-    }
-
-    private suspend fun executeOverpassWithFallback(query: String): OverpassResponse {
+    private suspend fun fetchMtbElementsWithFallback(
+        lat: Double,
+        lon: Double
+    ): Pair<List<OverpassElement>, Boolean> {
+        val endpoints = OverpassClient.endpointsForLocation(lat, lon)
+        val attempts = listOf(
+            buildPrimaryMtbQuery(lat, lon, includeGeometry = true) to true,
+            buildCoreMtbQuery(lat, lon, includeGeometry = true) to true,
+            buildPrimaryMtbQuery(lat, lon, includeGeometry = false) to false,
+            buildCoreMtbQuery(lat, lon, includeGeometry = false) to false
+        )
         var lastError: Exception? = null
-        for (endpoint in OverpassClient.ENDPOINTS) {
+        for ((query, hasGeom) in attempts) {
             try {
-                return OverpassClient.service.query(url = endpoint, query = query)
+                return executeOverpassWithFallback(query, endpoints).elements to hasGeom
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {
@@ -398,37 +532,272 @@ class TrailRepository(
         throw lastError ?: IllegalStateException("Overpass query failed")
     }
 
+    private suspend fun fetchSingletrackFallbackElements(
+        lat: Double,
+        lon: Double,
+        preferGeometry: Boolean
+    ): List<OverpassElement> {
+        val endpoints = OverpassClient.endpointsForLocation(lat, lon)
+        val attempts = buildList {
+            add(buildSingletrackFallbackQuery(lat, lon, radiusMiles = 12.0, includeGeometry = preferGeometry))
+            add(buildSingletrackFallbackQuery(lat, lon, radiusMiles = 8.0, includeGeometry = preferGeometry))
+            if (preferGeometry) {
+                add(buildSingletrackFallbackQuery(lat, lon, radiusMiles = 8.0, includeGeometry = false))
+            }
+        }
+        for (query in attempts) {
+            try {
+                return executeOverpassWithFallback(query, endpoints).elements
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                // Try tighter radius / lighter payload
+            }
+        }
+        return emptyList()
+    }
+
+    private fun orderEndpoints(baseEndpoints: List<String>): List<String> {
+        val now = System.currentTimeMillis()
+        val preferred = preferredEndpoint
+        return baseEndpoints.sortedWith(
+            compareBy<String> { (endpointCooldownUntilMs[it] ?: 0L) > now }
+                .thenBy { it != preferred }
+        )
+    }
+
+    private suspend fun executeOverpassWithFallback(
+        query: String,
+        baseEndpoints: List<String> = OverpassClient.ENDPOINTS
+    ): OverpassResponse = coroutineScope {
+        val endpoints = orderEndpoints(baseEndpoints)
+        val resultsChannel = Channel<Pair<String, Result<OverpassResponse>>>(endpoints.size)
+        val wakeSignal = Channel<Unit>(endpoints.size)
+        val completedOrEmpty = AtomicInteger(0)
+
+        endpoints.forEachIndexed { index, endpoint ->
+            launch {
+                if (index > 0) {
+                    val delayMs = index * HEDGE_STAGGER_MS
+                    val deadline = System.currentTimeMillis() + delayMs
+                    while (completedOrEmpty.get() < index) {
+                        val remaining = deadline - System.currentTimeMillis()
+                        if (remaining <= 0L) break
+                        withTimeoutOrNull(remaining) {
+                            wakeSignal.receive()
+                        }
+                    }
+                }
+                val attempt = try {
+                    val response = OverpassClient.service.query(url = endpoint, query = query)
+                    if (response.hasRuntimeError()) {
+                        throw IOException("Overpass runtime error: ${response.remark}")
+                    }
+                    endpointCooldownUntilMs.remove(endpoint)
+                    if (response.elements.isEmpty()) {
+                        completedOrEmpty.incrementAndGet()
+                        wakeSignal.trySend(Unit)
+                    }
+                    Result.success(response)
+                } catch (ce: CancellationException) {
+                    throw ce
+                } catch (e: Exception) {
+                    endpointCooldownUntilMs[endpoint] = System.currentTimeMillis() + MIRROR_COOLDOWN_MS
+                    completedOrEmpty.incrementAndGet()
+                    wakeSignal.trySend(Unit)
+                    Result.failure(e)
+                }
+                resultsChannel.trySend(endpoint to attempt)
+            }
+        }
+
+        var lastError: Throwable? = null
+        var firstEmptyResponse: OverpassResponse? = null
+        var remainingOutcomes = endpoints.size
+
+        while (remainingOutcomes > 0) {
+            val received = if (firstEmptyResponse == null) {
+                resultsChannel.receive()
+            } else {
+                withTimeoutOrNull(EMPTY_VERIFY_WAIT_MS) { resultsChannel.receive() }
+            }
+            if (received == null) break
+            remainingOutcomes--
+
+            val (endpoint, outcome) = received
+            outcome.onSuccess { response ->
+                if (response.elements.isNotEmpty()) {
+                    preferredEndpoint = endpoint
+                    coroutineContext.cancelChildren()
+                    return@coroutineScope response
+                } else if (firstEmptyResponse == null) {
+                    firstEmptyResponse = response
+                }
+            }.onFailure { err ->
+                lastError = err
+            }
+        }
+
+        if (firstEmptyResponse != null) {
+            coroutineContext.cancelChildren()
+            return@coroutineScope firstEmptyResponse
+        }
+        throw (lastError as? Exception) ?: IllegalStateException("Overpass query failed")
+    }
+
+    private fun buildOverpassHeaderAndFilter(
+        lat: Double,
+        lon: Double,
+        radiusMiles: Double,
+        timeoutSeconds: Int
+    ): Pair<String, String> {
+        val bbox = GeoUtils.computeBoundingBox(lat, lon, radiusMiles)
+        return if (!bbox.crossesAntimeridian) {
+            "[out:json][timeout:$timeoutSeconds][bbox:${bbox.toOverpassBboxString()}];" to ""
+        } else {
+            val latStr = String.format(Locale.US, "%.5f", lat)
+            val lonStr = String.format(Locale.US, "%.5f", lon)
+            val meters = (radiusMiles * 1609.344).toInt()
+            "[out:json][timeout:$timeoutSeconds];" to "(around:$meters,$latStr,$lonStr)"
+        }
+    }
+
     private fun buildPrimaryMtbQuery(lat: Double, lon: Double, includeGeometry: Boolean): String {
-        val latStr = String.format(Locale.US, "%.5f", lat)
-        val lonStr = String.format(Locale.US, "%.5f", lon)
-        val radius = GeoUtils.RADIUS_TWENTY_MILES_METERS
-        val outClause = if (includeGeometry) "out tags bb center geom;" else "out tags bb center;"
-        val timeout = if (includeGeometry) 30 else 25
+        val timeout = if (includeGeometry) 12 else 10
+        val (header, filter) = buildOverpassHeaderAndFilter(
+            lat = lat,
+            lon = lon,
+            radiusMiles = GeoUtils.RADIUS_TWENTY_MILES,
+            timeoutSeconds = timeout
+        )
+        val outClause = if (includeGeometry) "out geom qt;" else "out tags center qt;"
         return """
-            [out:json][timeout:$timeout];
+            $header
             (
-              relation["route"="mtb"](around:$radius,$latStr,$lonStr);
-              way["route"="mtb"](around:$radius,$latStr,$lonStr);
-              way["mtb:scale"](around:$radius,$latStr,$lonStr);
-              way["mtb:scale:imba"](around:$radius,$latStr,$lonStr);
-              way["mtb"](around:$radius,$latStr,$lonStr);
+              relation["route"="mtb"]$filter;
+              way["route"="mtb"]$filter;
+              way["mtb:scale"]$filter;
+              way["mtb:scale:imba"]$filter;
+              way["mtb:type"]$filter;
+              way["mtb"~"^(yes|designated|official|permissive|trail)$"]$filter;
+              way["highway"="path"]["bicycle"="designated"]$filter;
             );
             $outClause
         """.trimIndent()
     }
 
-    private fun buildSingletrackFallbackQuery(lat: Double, lon: Double, includeGeometry: Boolean): String {
-        val latStr = String.format(Locale.US, "%.5f", lat)
-        val lonStr = String.format(Locale.US, "%.5f", lon)
-        val radius = GeoUtils.RADIUS_TWENTY_MILES_METERS
-        val outClause = if (includeGeometry) "out tags bb center geom;" else "out tags bb center;"
+    private fun buildCoreMtbQuery(lat: Double, lon: Double, includeGeometry: Boolean): String {
+        val timeout = if (includeGeometry) 10 else 9
+        val (header, filter) = buildOverpassHeaderAndFilter(
+            lat = lat,
+            lon = lon,
+            radiusMiles = GeoUtils.RADIUS_TWENTY_MILES,
+            timeoutSeconds = timeout
+        )
+        val outClause = if (includeGeometry) "out geom qt;" else "out tags center qt;"
         return """
-            [out:json][timeout:25];
+            $header
             (
-              way["highway"~"path|track"]["bicycle"~"designated|yes"]["name"](around:$radius,$latStr,$lonStr);
+              relation["route"="mtb"]$filter;
+              way["route"="mtb"]$filter;
+              way["mtb:scale"]$filter;
+              way["mtb:scale:imba"]$filter;
+              way["mtb:type"]$filter;
+              way["mtb"~"^(yes|designated|official|permissive|trail)$"]$filter;
             );
             $outClause
         """.trimIndent()
+    }
+
+    private fun buildSingletrackFallbackQuery(
+        lat: Double,
+        lon: Double,
+        radiusMiles: Double = 12.0,
+        includeGeometry: Boolean
+    ): String {
+        val timeout = if (includeGeometry) 10 else 8
+        val (header, filter) = buildOverpassHeaderAndFilter(
+            lat = lat,
+            lon = lon,
+            radiusMiles = radiusMiles,
+            timeoutSeconds = timeout
+        )
+        val outClause = if (includeGeometry) "out geom qt;" else "out tags center qt;"
+        return """
+            $header
+            (
+              way["highway"="path"]["bicycle"~"^(yes|permissive)$"]["name"]$filter;
+              way["highway"="track"]["name"]["bicycle"!="no"]["access"!="private"]$filter;
+              way["highway"="path"]["name"]["surface"~"^(dirt|ground|earth|rock|gravel|unpaved|fine_gravel|compacted)$"]["bicycle"!="no"]$filter;
+            );
+            $outClause
+        """.trimIndent()
+    }
+
+    private fun mapPhotonFeature(feature: PhotonFeature): LocationPlace? {
+        val coords = feature.geometry?.coordinates ?: return null
+        if (coords.size < 2) return null
+        val lon = coords[0]
+        val lat = coords[1]
+        if (!lat.isFinite() || !lon.isFinite()) return null
+        val props = feature.properties ?: return null
+        val parts = listOfNotNull(
+            props.name?.takeIf { it.isNotBlank() },
+            props.city?.takeIf { it.isNotBlank() },
+            props.county?.takeIf { it.isNotBlank() }?.takeIf { props.city.isNullOrBlank() && props.name != it },
+            props.state?.takeIf { it.isNotBlank() } ?: props.country?.takeIf { it.isNotBlank() }
+        ).distinct()
+        val label = parts.take(3).joinToString(", ").ifBlank {
+            String.format(Locale.US, "%.3f°, %.3f°", lat, lon)
+        }
+        return LocationPlace(name = label, lat = lat, lon = lon, isCurrentGps = false)
+    }
+
+    private fun mapNominatimDto(dto: NominatimPlaceDto): LocationPlace? {
+        val lat = dto.lat.toDoubleOrNull() ?: return null
+        val lon = dto.lon.toDoubleOrNull() ?: return null
+        if (!lat.isFinite() || !lon.isFinite()) return null
+        val address = dto.address
+        val cleanName = if (!address.isNullOrEmpty()) {
+            val primary = address["tourism"]
+                ?: address["leisure"]
+                ?: address["park"]
+                ?: address["natural"]
+                ?: address["city"]
+                ?: address["town"]
+                ?: address["village"]
+                ?: address["hamlet"]
+                ?: address["county"]
+            val locality = address["city"] ?: address["town"] ?: address["village"]
+            val region = address["state"] ?: address["country"]
+            listOfNotNull(
+                primary?.takeIf { it.isNotBlank() },
+                locality?.takeIf { it.isNotBlank() && it != primary },
+                region?.takeIf { it.isNotBlank() && it != primary }
+            ).distinct().take(3).joinToString(", ")
+        } else {
+            ""
+        }.ifBlank {
+            dto.displayName
+                .split(",")
+                .take(2)
+                .joinToString(", ") { it.trim() }
+        }
+        return LocationPlace(name = cleanName, lat = lat, lon = lon, isCurrentGps = false)
+    }
+
+    private fun deduplicatePlaces(places: List<LocationPlace>): List<LocationPlace> {
+        val deduped = ArrayList<LocationPlace>(places.size)
+        for (candidate in places) {
+            val alreadyPresent = deduped.any { existing ->
+                existing.name.equals(candidate.name, ignoreCase = true) ||
+                    GeoUtils.haversineMiles(existing.lat, existing.lon, candidate.lat, candidate.lon) < 0.5
+            }
+            if (!alreadyPresent) {
+                deduped.add(candidate)
+            }
+        }
+        return deduped
     }
 
     private fun OfflineRegionEntity.toDomain(): OfflineRegion = OfflineRegion(
@@ -443,7 +812,29 @@ class TrailRepository(
         hasFullGeometry = hasFullGeometry
     )
 
-    private companion object {
-        const val MAX_ELEVATION_CACHE_ENTRIES = 150
+    internal companion object {
+        private const val MAX_ELEVATION_CACHE_ENTRIES = 150
+        private const val MAX_SCAN_CACHE_ENTRIES = 12
+        private const val SCAN_CACHE_TTL_MS = 5 * 60_000L
+        private const val MAX_PLACE_CACHE_ENTRIES = 40
+        private const val PLACE_CACHE_TTL_MS = 10 * 60_000L
+        private const val MAX_PLACE_RESULTS = 10
+        private const val HEDGE_STAGGER_MS = 700L
+        private const val MIRROR_COOLDOWN_MS = 60_000L
+        private const val EMPTY_VERIFY_WAIT_MS = 3_500L
+        private const val MIN_PRIMARY_TRAIL_THRESHOLD = 5
+
+        private val COORDINATE_QUERY_REGEX = Regex(
+            """^\s*(-?\d{1,2}(?:\.\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:\.\d+)?)\s*$"""
+        )
+
+        internal fun parseCoordinateQuery(query: String): LocationPlace? {
+            val match = COORDINATE_QUERY_REGEX.matchEntire(query) ?: return null
+            val lat = match.groupValues[1].toDoubleOrNull() ?: return null
+            val lon = match.groupValues[2].toDoubleOrNull() ?: return null
+            if (lat !in -90.0..90.0 || lon !in -180.0..180.0) return null
+            val label = String.format(Locale.US, "Coordinates (%.4f°, %.4f°)", lat, lon)
+            return LocationPlace(name = label, lat = lat, lon = lon, isCurrentGps = false)
+        }
     }
 }

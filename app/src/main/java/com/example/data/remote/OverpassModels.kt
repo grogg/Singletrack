@@ -5,8 +5,20 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class OverpassResponse(
+    @Json(name = "remark") val remark: String? = null,
     @Json(name = "elements") val elements: List<OverpassElement> = emptyList()
-)
+) {
+    fun hasRuntimeError(): Boolean {
+        val text = remark?.trim() ?: return false
+        if (text.isEmpty()) return false
+        return elements.isEmpty() ||
+            text.contains("error", ignoreCase = true) ||
+            text.contains("timed out", ignoreCase = true) ||
+            text.contains("timeout", ignoreCase = true) ||
+            text.contains("out of memory", ignoreCase = true) ||
+            text.contains("runtime", ignoreCase = true)
+    }
+}
 
 @JsonClass(generateAdapter = true)
 data class OverpassElement(

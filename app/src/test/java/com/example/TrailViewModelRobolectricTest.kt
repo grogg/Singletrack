@@ -21,6 +21,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -229,6 +230,43 @@ class TrailViewModelRobolectricTest {
             viewModel.discardRide()
             store.clear()
             storage.clearActiveTrack()
+            Thread { SingletrackDatabase.getInstance(app).clearAllTables() }.apply {
+                start()
+                join()
+            }
+        }
+    }
+
+    @Test
+    fun `debounced coordinate place search resolves offline location and clearing resets results`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val store = ViewModelStore()
+        val viewModel = ViewModelProvider(
+            store,
+            ViewModelProvider.AndroidViewModelFactory(app)
+        )[TrailViewModel::class.java]
+
+        try {
+            viewModel.updatePlaceSearchQuery("38.5733, -109.5498")
+
+            val deadline = System.currentTimeMillis() + 5_000L
+            while (viewModel.uiState.value.placeSearchResults.isEmpty() && System.currentTimeMillis() < deadline) {
+                ShadowLooper.idleMainLooper(350L, TimeUnit.MILLISECONDS)
+                Thread.sleep(25L)
+            }
+
+            val results = viewModel.uiState.value.placeSearchResults
+            assertEquals(1, results.size)
+            assertEquals(38.5733, results.first().lat, 0.0001)
+            assertEquals(-109.5498, results.first().lon, 0.0001)
+            assertFalse(viewModel.uiState.value.isSearchingPlaces)
+
+            viewModel.updatePlaceSearchQuery("")
+            ShadowLooper.idleMainLooper()
+            assertTrue(viewModel.uiState.value.placeSearchResults.isEmpty())
+            assertFalse(viewModel.uiState.value.isSearchingPlaces)
+        } finally {
+            store.clear()
             Thread { SingletrackDatabase.getInstance(app).clearAllTables() }.apply {
                 start()
                 join()

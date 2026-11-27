@@ -49,10 +49,19 @@ class LocationProvider(private val context: Context) {
             return DeviceLocationResult.PermissionMissing
         }
 
-        val current = withTimeoutOrNull(8000L) {
-            fetchCurrentFix()
-        } ?: withTimeoutOrNull(3000L) {
+        val lastKnown = withTimeoutOrNull(600L) {
             fetchLastKnownLocation()
+        }
+        val isRecentAccurateLastKnown = lastKnown != null &&
+            (System.currentTimeMillis() - lastKnown.time) in 0L..MAX_CACHED_FIX_AGE_MS &&
+            (!lastKnown.hasAccuracy() || lastKnown.accuracy <= 100f)
+
+        val current = if (isRecentAccurateLastKnown) {
+            lastKnown
+        } else {
+            withTimeoutOrNull(4500L) {
+                fetchCurrentFix()
+            } ?: lastKnown
         }
 
         if (current == null) {
@@ -111,23 +120,27 @@ class LocationProvider(private val context: Context) {
         try {
             if (Geocoder.isPresent()) {
                 val geocoder = Geocoder(context, Locale.getDefault())
-                @Suppress("DEPRECATION")
-                val addresses = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    suspendCancellableCoroutine { cont ->
-                        geocoder.getFromLocation(lat, lon, 1) { list ->
-                            if (cont.isActive) cont.resume(list)
+                val formatted = withTimeoutOrNull(2000L) {
+                    @Suppress("DEPRECATION")
+                    val addresses = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        suspendCancellableCoroutine { cont ->
+                            geocoder.getFromLocation(lat, lon, 1) { list ->
+                                if (cont.isActive) cont.resume(list)
+                            }
                         }
+                    } else {
+                        geocoder.getFromLocation(lat, lon, 1)
                     }
-                } else {
-                    geocoder.getFromLocation(lat, lon, 1)
+                    val first = addresses?.firstOrNull()
+                    if (first != null) {
+                        val city = first.locality ?: first.subAdminArea ?: first.featureName
+                        val state = first.adminArea
+                        listOfNotNull(city, state).distinct().joinToString(", ")
+                    } else {
+                        null
+                    }
                 }
-                val first = addresses?.firstOrNull()
-                if (first != null) {
-                    val city = first.locality ?: first.subAdminArea ?: first.featureName
-                    val state = first.adminArea
-                    val formatted = listOfNotNull(city, state).distinct().joinToString(", ")
-                    if (formatted.isNotBlank()) return@withContext formatted
-                }
+                if (!formatted.isNullOrBlank()) return@withContext formatted
             }
         } catch (ce: CancellationException) {
             throw ce
@@ -135,5 +148,9 @@ class LocationProvider(private val context: Context) {
             // Fall through to coordinate label
         }
         String.format(Locale.US, "%.3f°, %.3f°", lat, lon)
+    }
+
+    private companion object {
+        const val MAX_CACHED_FIX_AGE_MS = 120_000L
     }
 }

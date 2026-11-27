@@ -20,6 +20,23 @@ data class SampledRoutePoint(
     val point: GeoPoint
 )
 
+data class GeoBoundingBox(
+    val south: Double,
+    val west: Double,
+    val north: Double,
+    val east: Double,
+    val crossesAntimeridian: Boolean
+) {
+    fun toOverpassBboxString(): String = String.format(
+        Locale.US,
+        "%.5f,%.5f,%.5f,%.5f",
+        south,
+        west,
+        north,
+        east
+    )
+}
+
 object GeoUtils {
     const val EARTH_RADIUS_MILES = 3958.7613
     const val RADIUS_TWENTY_MILES = 20.0
@@ -27,6 +44,39 @@ object GeoUtils {
     private val CARDINAL_DIRECTIONS = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
     private val POSITIVE_NUMBER_REGEX = Regex("""([0-9]+(?:\.[0-9]+)?)""")
     private val SIGNED_NUMBER_REGEX = Regex("""(-?[0-9]+(?:\.[0-9]+)?)""")
+    private val PAVED_SURFACES = setOf("asphalt", "paved", "concrete", "paving_stones", "cobblestone")
+
+    fun computeBoundingBox(
+        lat: Double,
+        lon: Double,
+        radiusMiles: Double = RADIUS_TWENTY_MILES
+    ): GeoBoundingBox {
+        val latDelta = Math.toDegrees(radiusMiles / EARTH_RADIUS_MILES)
+        val cosLat = cos(Math.toRadians(lat)).coerceAtLeast(0.01)
+        val lonDelta = Math.toDegrees(radiusMiles / (EARTH_RADIUS_MILES * cosLat))
+
+        val south = (lat - latDelta).coerceIn(-89.9, 89.9)
+        val north = (lat + latDelta).coerceIn(-89.9, 89.9)
+        val rawWest = lon - lonDelta
+        val rawEast = lon + lonDelta
+        val crossesAntimeridian = rawWest < -180.0 || rawEast > 180.0 || lonDelta >= 179.0
+
+        val west = normalizeLon(rawWest)
+        val east = normalizeLon(rawEast)
+        return GeoBoundingBox(
+            south = south,
+            west = west,
+            north = north,
+            east = east,
+            crossesAntimeridian = crossesAntimeridian
+        )
+    }
+
+    private fun normalizeLon(lon: Double): Double {
+        var normalized = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+        if (normalized == -180.0 && lon > 0.0) normalized = 180.0
+        return normalized
+    }
 
     fun haversineMiles(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = Math.toRadians(lat2 - lat1)
@@ -141,6 +191,7 @@ object GeoUtils {
                 return when {
                     cleaned.contains("mi") -> number
                     cleaned.contains("km") -> number * 0.621371
+                    cleaned.contains("ft") -> number / 5280.0
                     cleaned.endsWith("m") -> number * 0.000621371
                     else -> number * 0.621371
                 }
@@ -177,25 +228,77 @@ object GeoUtils {
     ): List<Trail> {
         val parsed = elements.mapNotNull { el ->
             val tags = el.tags.orEmpty()
+            val mtbTag = tags["mtb"]?.trim()?.lowercase(Locale.US)
+            val bikeTag = tags["bicycle"]?.trim()?.lowercase(Locale.US)
+            val accessTag = tags["access"]?.trim()?.lowercase(Locale.US)
+            val isMtbRoute = tags["route"] == "mtb"
+
+            if (!isMtbRoute) {
+                if (mtbTag == "no" || mtbTag == "false") return@mapNotNull null
+                if (bikeTag == "no" || bikeTag == "dismount") return@mapNotNull null
+                if ((accessTag == "private" || accessTag == "no") &&
+                    bikeTag !in listOf("yes", "designated", "permissive")
+                ) {
+                    return@mapNotNull null
+                }
+            }
+
+            val hasExplicitMtbTag = tags.containsKey("mtb:scale") ||
+                tags.containsKey("mtb:scale:imba") ||
+                tags.containsKey("mtb:type") ||
+                isMtbRoute ||
+                (mtbTag != null && mtbTag !in listOf("no", "false"))
+
+            val surfaceTag = tags["surface"]?.trim()?.lowercase(Locale.US)
+            if (!hasExplicitMtbTag &&
+                tags["highway"] in listOf("cycleway", "path", "track") &&
+                surfaceTag in PAVED_SURFACES
+            ) {
+                return@mapNotNull null
+            }
+
             val segments = extractGeometrySegments(el)
             val flatGeom = segments.flatten()
-            val centerLat = el.center?.lat ?: el.lat ?: flatGeom.firstOrNull()?.lat ?: return@mapNotNull null
-            val centerLon = el.center?.lon ?: el.lon ?: flatGeom.firstOrNull()?.lon ?: return@mapNotNull null
+            val boundsMidLat = el.bounds?.let { (it.minLat + it.maxLat) / 2.0 }
+            val boundsMidLon = el.bounds?.let { (it.minLon + it.maxLon) / 2.0 }
+            val geomMid = if (flatGeom.isNotEmpty()) flatGeom[flatGeom.size / 2] else null
 
-            val distanceMiles = haversineMiles(originLat, originLon, centerLat, centerLon)
+            val centerLat = el.center?.lat ?: el.lat ?: boundsMidLat ?: geomMid?.lat ?: return@mapNotNull null
+            val centerLon = el.center?.lon ?: el.lon ?: boundsMidLon ?: geomMid?.lon ?: return@mapNotNull null
+
+            val centerDist = haversineMiles(originLat, originLon, centerLat, centerLon)
+            var distanceMiles = centerDist
+            var bearingTargetLat = centerLat
+            var bearingTargetLon = centerLon
+
+            if (flatGeom.isNotEmpty()) {
+                val step = maxOf(1, flatGeom.size / 12)
+                for (i in flatGeom.indices step step) {
+                    val pt = flatGeom[i]
+                    val d = haversineMiles(originLat, originLon, pt.lat, pt.lon)
+                    if (d < distanceMiles) {
+                        distanceMiles = d
+                        bearingTargetLat = pt.lat
+                        bearingTargetLon = pt.lon
+                    }
+                }
+                val last = flatGeom.last()
+                val lastDist = haversineMiles(originLat, originLon, last.lat, last.lon)
+                if (lastDist < distanceMiles) {
+                    distanceMiles = lastDist
+                    bearingTargetLat = last.lat
+                    bearingTargetLon = last.lon
+                }
+            }
+
             if (distanceMiles > RADIUS_TWENTY_MILES) return@mapNotNull null
 
             val rawName = tags["name"]?.trim()?.takeIf { it.isNotBlank() }
                 ?: tags["ref"]?.trim()?.takeIf { it.isNotBlank() }?.let { "Trail $it" }
 
-            val hasExplicitMtbTag = tags.containsKey("mtb:scale") ||
-                tags.containsKey("mtb:scale:imba") ||
-                tags["route"] == "mtb" ||
-                tags.containsKey("mtb")
-
             if (rawName == null && !hasExplicitMtbTag) return@mapNotNull null
 
-            val bearing = bearingDegrees(originLat, originLon, centerLat, centerLon)
+            val bearing = bearingDegrees(originLat, originLon, bearingTargetLat, bearingTargetLon)
             val (difficulty, rawDiff) = parseDifficulty(tags)
             val lengthMiles = parseLengthMiles(tags, segments, el)
             val taggedAscentFeet = parseElevationFeet(tags["ascent"] ?: tags["climb"])

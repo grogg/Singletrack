@@ -12,9 +12,12 @@ import com.example.data.repository.GeoUtils
 import com.example.data.repository.GpxNavigationEngine
 import com.example.data.repository.MapCameraState
 import com.example.data.repository.SampledRoutePoint
+import com.example.data.repository.TrailRepository
 import com.example.data.repository.WebMercatorUtils
 import com.example.data.remote.OverpassCenter
 import com.example.data.remote.OverpassElement
+import com.example.data.remote.OverpassGeomPoint
+import com.example.data.remote.OverpassResponse
 import com.example.domain.model.ElevationPoint
 import com.example.domain.model.GeoPoint
 import com.example.domain.model.GpxNavigationState
@@ -24,9 +27,12 @@ import com.example.domain.model.PhysicalEffortRating
 import com.example.domain.model.RecordedRide
 import com.example.domain.model.RideRecordingStatus
 import com.example.domain.model.RideSample
+import com.example.domain.model.Trail
 import com.example.domain.model.TrailDifficulty
 import com.example.domain.model.TrailElevationProfile
+import com.example.domain.model.TrailSortOrder
 import com.example.ui.components.FormatUtils
+import com.example.ui.viewmodel.applyTrailFiltersAndSort
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -490,6 +496,23 @@ class GeoUtilsAndSerializerTest {
         assertTrue(OverpassClient.ENDPOINTS.contains("https://overpass-api.de/api/interpreter"))
         assertTrue(OverpassClient.ENDPOINTS.all { it.startsWith("https://") })
         assertFalse(OverpassClient.ENDPOINTS.any { it.contains(".ru", ignoreCase = true) })
+        assertFalse(OverpassClient.ENDPOINTS.any { it.contains("osm.ch", ignoreCase = true) })
+    }
+
+    @Test
+    fun overpassEndpoints_routesRegionalMirrorsStrictlyByContinent() {
+        val phoenixEndpoints = OverpassClient.endpointsForLocation(33.4484, -112.0740)
+        assertTrue(phoenixEndpoints.containsAll(OverpassClient.ENDPOINTS))
+        assertTrue(phoenixEndpoints.contains("https://ovp.dresel.systems/api-na/interpreter"))
+        assertFalse(phoenixEndpoints.contains("https://ovp.dresel.systems/api/interpreter"))
+
+        val alpsEndpoints = OverpassClient.endpointsForLocation(46.8, 8.2)
+        assertTrue(alpsEndpoints.containsAll(OverpassClient.ENDPOINTS))
+        assertTrue(alpsEndpoints.contains("https://ovp.dresel.systems/api/interpreter"))
+        assertFalse(alpsEndpoints.contains("https://ovp.dresel.systems/api-na/interpreter"))
+
+        val sydneyEndpoints = OverpassClient.endpointsForLocation(-33.8688, 151.2093)
+        assertEquals(OverpassClient.ENDPOINTS, sydneyEndpoints)
     }
 
     @Test
@@ -992,5 +1015,175 @@ class GeoUtilsAndSerializerTest {
         )
         assertEquals("Route complete! You have reached the finish.", finishCue?.text)
         assertTrue(finishCue?.interrupt == true)
+    }
+
+    @Test
+    fun geoUtils_computeBoundingBox_andAccessAndProximityFiltering() {
+        val moabLat = 38.5733
+        val moabLon = -109.5498
+        val bbox = GeoUtils.computeBoundingBox(moabLat, moabLon)
+        assertFalse(bbox.crossesAntimeridian)
+        assertTrue(bbox.south < moabLat && bbox.north > moabLat)
+        assertTrue(bbox.west < moabLon && bbox.east > moabLon)
+        assertTrue(GeoUtils.haversineMiles(moabLat, moabLon, bbox.north, moabLon) in 19.5..20.5)
+
+        val dateLineBox = GeoUtils.computeBoundingBox(18.0, 179.9)
+        assertTrue(dateLineBox.crossesAntimeridian)
+
+        val bannedMtb = OverpassElement(
+            type = "way",
+            id = 301L,
+            center = OverpassCenter(38.58, -109.55),
+            tags = mapOf("name" to "Hiker Only", "highway" to "path", "mtb" to "no")
+        )
+        val noBike = OverpassElement(
+            type = "way",
+            id = 302L,
+            center = OverpassCenter(38.58, -109.55),
+            tags = mapOf("name" to "Wilderness Trail", "highway" to "path", "bicycle" to "no")
+        )
+        val privateTrail = OverpassElement(
+            type = "way",
+            id = 303L,
+            center = OverpassCenter(38.58, -109.55),
+            tags = mapOf("name" to "Private Ranch", "highway" to "track", "access" to "private")
+        )
+        val pavedGreenway = OverpassElement(
+            type = "way",
+            id = 304L,
+            center = OverpassCenter(38.58, -109.55),
+            tags = mapOf("name" to "Town Bike Path", "highway" to "cycleway", "surface" to "asphalt")
+        )
+        // Long trail whose center is > 25 mi away, but its geometry enters within 5 miles
+        val longCorridorTrail = OverpassElement(
+            type = "way",
+            id = 305L,
+            center = OverpassCenter(38.9400, -109.5498),
+            tags = mapOf(
+                "name" to "Grand Corridor",
+                "highway" to "path",
+                "bicycle" to "designated",
+                "length" to "5280 ft"
+            ),
+            geometry = listOf(
+                OverpassGeomPoint(38.6300, -109.5498), // ~3.9 miles north
+                OverpassGeomPoint(38.9400, -109.5498)
+            )
+        )
+
+        val parsed = GeoUtils.parseAndGroupElements(
+            elements = listOf(bannedMtb, noBike, privateTrail, pavedGreenway, longCorridorTrail),
+            originLat = moabLat,
+            originLon = moabLon
+        )
+        assertEquals(1, parsed.size)
+        val kept = parsed.first()
+        assertEquals("Grand Corridor", kept.name)
+        assertEquals(1.0, kept.lengthMiles ?: 0.0, 0.02)
+        assertTrue(kept.distanceFromUserMiles < 5.0)
+    }
+
+    @Test
+    fun applyTrailFiltersAndSort_supportsMultiTokenMetadataAndRelevanceRanking() {
+        fun sampleTrail(
+            id: Long,
+            name: String,
+            surface: String = "Dirt",
+            difficulty: TrailDifficulty = TrailDifficulty.INTERMEDIATE,
+            network: String? = null,
+            description: String? = null,
+            distanceMiles: Double = 2.0
+        ) = Trail(
+            osmKey = "way/$id",
+            osmType = "way",
+            osmId = id,
+            name = name,
+            difficulty = difficulty,
+            rawDifficultyTag = null,
+            surface = surface,
+            centerLat = 38.57,
+            centerLon = -109.55,
+            distanceFromUserMiles = distanceMiles,
+            bearingDegrees = 0.0,
+            bearingCardinal = "N",
+            lengthMiles = 4.0,
+            operatorName = null,
+            networkName = network,
+            description = description,
+            oneway = null,
+            uphillScale = null,
+            isDesignatedMtb = true
+        )
+
+        val descriptionMatch = sampleTrail(
+            id = 1L,
+            name = "Alpha Ridge",
+            description = "Fast slickrock flow through Moab Brands",
+            distanceMiles = 1.0
+        )
+        val prefixNameMatch = sampleTrail(
+            id = 2L,
+            name = "Moab Brands Loop",
+            surface = "Slickrock",
+            distanceMiles = 5.0
+        )
+        val networkAndSurfaceMatch = sampleTrail(
+            id = 3L,
+            name = "Lazy EZ",
+            surface = "Compact Dirt",
+            network = "Moab Brands",
+            distanceMiles = 3.0
+        )
+
+        val results = applyTrailFiltersAndSort(
+            trails = listOf(descriptionMatch, networkAndSurfaceMatch, prefixNameMatch),
+            query = "moab brands",
+            difficulty = null,
+            sortOrder = TrailSortOrder.CLOSEST
+        )
+
+        assertEquals(3, results.size)
+        assertEquals("Moab Brands Loop", results[0].name)
+        assertEquals("Alpha Ridge", results[1].name)
+        assertEquals("Lazy EZ", results[2].name)
+    }
+
+    @Test
+    fun trailRepository_parseCoordinateQuery_handlesValidAndInvalidInputs() {
+        val valid = TrailRepository.parseCoordinateQuery("38.5733, -109.5498")
+        assertNotNull(valid)
+        assertEquals(38.5733, valid!!.lat, 0.0001)
+        assertEquals(-109.5498, valid.lon, 0.0001)
+
+        val spaceSeparated = TrailRepository.parseCoordinateQuery("34.8697 -111.7610")
+        assertNotNull(spaceSeparated)
+        assertEquals(34.8697, spaceSeparated!!.lat, 0.0001)
+
+        assertNull(TrailRepository.parseCoordinateQuery("95.0, -109.5"))
+        assertNull(TrailRepository.parseCoordinateQuery("Moab, Utah"))
+    }
+
+    @Test
+    fun overpassResponse_detectsRuntimeRemarkErrorsEvenWithHttp200() {
+        val timedOutEmpty = OverpassResponse(
+            remark = "runtime error: Query timed out in \"query\" at line 5 after 18 seconds.",
+            elements = emptyList()
+        )
+        assertTrue(timedOutEmpty.hasRuntimeError())
+
+        val oomPartial = OverpassResponse(
+            remark = "runtime error: Query run out of memory in \"query\" at line 12.",
+            elements = listOf(OverpassElement(type = "way", id = 1L))
+        )
+        assertTrue(oomPartial.hasRuntimeError())
+
+        val healthyResponse = OverpassResponse(
+            remark = null,
+            elements = listOf(OverpassElement(type = "way", id = 1L))
+        )
+        assertFalse(healthyResponse.hasRuntimeError())
+
+        val cleanEmpty = OverpassResponse(remark = null, elements = emptyList())
+        assertFalse(cleanEmpty.hasRuntimeError())
     }
 }

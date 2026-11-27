@@ -93,6 +93,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     private var gpxInitFixJob: Job? = null
     private var trailScanJob: Job? = null
     private var detailLoadJob: Job? = null
+    private var placeSearchJob: Job? = null
+    private var locationLabelJob: Job? = null
     private val activeRidePoints = ArrayList<GeoPoint>()
     private val activeRideSamples = ArrayList<RideSample>()
     private var lastAltitudeMeters: Double? = null
@@ -638,7 +640,8 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun locateAndScanCurrentPosition() {
+    fun locateAndScanCurrentPosition(forceRefresh: Boolean = false) {
+        locationLabelJob?.cancel()
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -648,7 +651,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            when (val result = locationProvider.getCurrentLocation()) {
+            when (val result = locationProvider.getCurrentLocation(resolveLabel = false)) {
                 is DeviceLocationResult.Success -> {
                     val place = LocationPlace(
                         name = result.label,
@@ -664,7 +667,24 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                             isCurrentAreaSavedOffline = isLocationSavedOffline(place, it.offlineRegions)
                         )
                     }
-                    scanTrailsAt(place.lat, place.lon)
+                    scanTrailsAt(place.lat, place.lon, forceRefresh = forceRefresh)
+                    locationLabelJob = viewModelScope.launch {
+                        val resolvedLabel = locationProvider.reverseGeocodeLabel(place.lat, place.lon)
+                        if (resolvedLabel.isNotBlank() && resolvedLabel != place.name) {
+                            _uiState.update { state ->
+                                val current = state.activeLocation
+                                if (current != null &&
+                                    current.isCurrentGps &&
+                                    kotlin.math.abs(current.lat - place.lat) < 1e-5 &&
+                                    kotlin.math.abs(current.lon - place.lon) < 1e-5
+                                ) {
+                                    state.copy(activeLocation = current.copy(name = resolvedLabel))
+                                } else {
+                                    state
+                                }
+                            }
+                        }
+                    }
                 }
 
                 is DeviceLocationResult.PermissionMissing -> {
@@ -690,11 +710,14 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectCustomLocation(place: LocationPlace) {
+        locationLabelJob?.cancel()
         _uiState.update {
             it.copy(
                 activeLocation = place,
                 locationUnavailableReason = null,
                 isCurrentAreaSavedOffline = isLocationSavedOffline(place, it.offlineRegions),
+                searchQuery = "",
+                selectedDifficulty = null,
                 currentDestination = AppDestination.EXPLORE
             )
         }
@@ -705,16 +728,16 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
         val active = _uiState.value.activeLocation
         if (active != null) {
             if (active.isCurrentGps && locationProvider.hasLocationPermission()) {
-                locateAndScanCurrentPosition()
+                locateAndScanCurrentPosition(forceRefresh = true)
             } else {
-                scanTrailsAt(active.lat, active.lon)
+                scanTrailsAt(active.lat, active.lon, forceRefresh = true)
             }
         } else if (locationProvider.hasLocationPermission()) {
-            locateAndScanCurrentPosition()
+            locateAndScanCurrentPosition(forceRefresh = true)
         }
     }
 
-    private fun scanTrailsAt(lat: Double, lon: Double) {
+    private fun scanTrailsAt(lat: Double, lon: Double, forceRefresh: Boolean = false) {
         trailScanJob?.cancel()
         detailLoadJob?.cancel()
         trailScanJob = viewModelScope.launch {
@@ -728,7 +751,7 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            val result = trailRepository.fetchTrailsNear(lat, lon)
+            val result = trailRepository.fetchTrailsNear(lat, lon, forceRefresh = forceRefresh)
             result.onSuccess { scan ->
                 _uiState.update { state ->
                     val filtered = applyTrailFiltersAndSort(
@@ -1050,16 +1073,43 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updatePlaceSearchQuery(query: String) {
+        placeSearchJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length < 2) {
+            _uiState.update {
+                it.copy(
+                    placeSearchQuery = query,
+                    placeSearchResults = emptyList(),
+                    isSearchingPlaces = false,
+                    placeSearchError = null
+                )
+            }
+            return
+        }
+
         _uiState.update { it.copy(placeSearchQuery = query, placeSearchError = null) }
+        if (trimmed.length >= 3) {
+            placeSearchJob = viewModelScope.launch {
+                delay(300L)
+                executePlaceSearch(trimmed)
+            }
+        }
     }
 
     fun searchPlaces() {
         val query = _uiState.value.placeSearchQuery.trim()
         if (query.length < 2) return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isSearchingPlaces = true, placeSearchError = null) }
-            val res = trailRepository.searchPlaces(query)
-            res.onSuccess { places ->
+        placeSearchJob?.cancel()
+        placeSearchJob = viewModelScope.launch {
+            executePlaceSearch(query)
+        }
+    }
+
+    private suspend fun executePlaceSearch(query: String) {
+        _uiState.update { it.copy(isSearchingPlaces = true, placeSearchError = null) }
+        val res = trailRepository.searchPlaces(query)
+        res.onSuccess { places ->
+            if (_uiState.value.placeSearchQuery.trim().equals(query, ignoreCase = true)) {
                 _uiState.update {
                     it.copy(
                         isSearchingPlaces = false,
@@ -1067,13 +1117,19 @@ class TrailViewModel(application: Application) : AndroidViewModel(application) {
                         placeSearchError = if (places.isEmpty()) "No matching locations found." else null
                     )
                 }
-            }.onFailure { err ->
+            } else {
+                _uiState.update { it.copy(isSearchingPlaces = false) }
+            }
+        }.onFailure { err ->
+            if (_uiState.value.placeSearchQuery.trim().equals(query, ignoreCase = true)) {
                 _uiState.update {
                     it.copy(
                         isSearchingPlaces = false,
                         placeSearchError = err.localizedMessage ?: "Search failed"
                     )
                 }
+            } else {
+                _uiState.update { it.copy(isSearchingPlaces = false) }
             }
         }
     }
